@@ -13,7 +13,6 @@ try:
     from transformers import AutoModel, AutoTokenizer, AutoConfig, PretrainedConfig
     from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling, \
         BaseModelOutputWithPoolingAndCrossAttentions
-    from adapters import AutoAdapterModel
 except ImportError as e:
     transformers = None
 
@@ -129,7 +128,7 @@ class HFTextEncoder(nn.Module):
                 self.transformer = create_func(model_args, add_pooling_layer=uses_transformer_pooler)
         else:
             self.config = config
-            self.transformer = AutoAdapterModel.from_config(config)
+            self.transformer = AutoModel.from_config(config)
         if pooler_type is None:  # get default arch pooler
             pooler_type = (arch_dict[self.config.model_type]["pooler"])
 
