@@ -254,6 +254,12 @@ def create_model(
         else:
             model = CLIP(**model_cfg, cast_dtype=cast_dtype)
 
+        if add_adapters:
+            adapters.init(model.text.transformer)
+            adapter_config = AdapterConfig.load("seq_bn")
+            model.text.transformer.add_adapter("test_adapter", adapter_config)
+            model.text.transformer.set_active_adapters("test_adapter")
+
         if precision in ("fp16", "bf16"):
             dtype = torch.float16 if 'fp16' in precision else torch.bfloat16
             # manual mixed precision that matches original OpenAI behaviour
@@ -320,11 +326,6 @@ def create_model(
         force_preprocess_cfg['size'] = model.visual.image_size
     set_model_preprocess_cfg(model, merge_preprocess_dict(preprocess_cfg, force_preprocess_cfg))
 
-    if add_adapters:
-        adapters.init(model.text.transformer)
-        adapter_config = AdapterConfig.load("seq_bn")
-        model.text.transformer.add_adapter("test_adapter", adapter_config)
-        model.text.transformer.set_active_adapters("test_adapter")
 
     return model
 
