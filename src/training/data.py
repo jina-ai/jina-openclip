@@ -17,7 +17,6 @@ import webdataset as wds
 from PIL import Image
 from torch.utils.data import (
     DataLoader,
-    Dataset,
     IterableDataset,
     SubsetRandomSampler,
     get_worker_info,
@@ -37,7 +36,108 @@ except ImportError:
     hvd = None
 
 
-class CsvDataset(Dataset):
+import random
+from typing import List
+
+from datasets import Dataset
+from torch.utils.data import Dataset as PTDataset
+from torch.utils.data import Sampler
+
+
+class ArrowMultiDataset(PTDataset):
+    def __init__(
+        self, ds_names, default_features=('left', 'right'), ds_to_features=None
+    ):
+        self._datasets = {name: Dataset.load_from_disk(f"s3://embedding-datasets-arrow/{name}") for name in ds_names}
+        self._ds_to_features = {name: default_features for name in ds_names}  # Default
+        if ds_to_features is not None:
+            self._ds_to_features.update(ds_to_features)
+
+    def __getitem__(self, item):
+        ds, idx = item
+        row = self._datasets[ds][idx]
+        return ds, (tuple(row[feature] for feature in self._ds_to_features[ds]), None)
+
+    def __getitems__(self, keys: List) -> List:
+        return [self.__getitem__(key) for key in keys]
+
+    def lengths(self):
+        return {name: len(ds) for name, ds in self._datasets.items()}
+
+    def __len__(self):
+        return sum(self.lengths().values())
+
+
+class MultiDatasetSampler(Sampler[List]):
+    def __init__(
+        self,
+        dataset_lengths,
+        relative_sampling_rates,
+        batch_sizes,
+        args,
+        batches_per_epoch,
+        seed=0,
+        synchronous=False,
+    ):
+        self._dataset_lengths = dataset_lengths
+        self._relative_sampling_rates = relative_sampling_rates
+        self._batch_sizes = batch_sizes
+        self._batches_per_epoch = batches_per_epoch
+        self._synchronous = synchronous
+
+        # !!! should be GLOBAL rank
+        seed_offset = 0 if synchronous else args.rank
+        # multiply base seed by 64 to avoid overlaps in multi-gpu training
+        self._rng = random.Random(64 * seed + seed_offset)
+        self._num_devices = args.world_size
+        self._global_rank = args.rank
+        self._local_dataset_lengths = {
+            name: (ds_length + self._num_devices - 1 - self._global_rank)
+            // self._num_devices
+            for name, ds_length in self._dataset_lengths.items()
+        }
+
+        self._current_index = {ds_name: 0 for ds_name in dataset_lengths.keys()}
+        self._sampling_rates = {
+            ds_name: relative_sampling_rates.get(ds_name, 1)
+            * self._local_dataset_lengths[ds_name]
+            for ds_name in dataset_lengths.keys()
+        }
+        self._num_batches = 0
+
+    def _get_local_row_indices(self, ds_name):
+        batch_size = self._batch_sizes[ds_name]
+        local_ds_length = self._local_dataset_lengths[ds_name]
+        assert local_ds_length >= batch_size
+        current_index = self._current_index[ds_name]
+        if batch_size + current_index >= local_ds_length:
+            current_index = 0
+        result = list(range(current_index, current_index + batch_size))
+        self._current_index[ds_name] += batch_size
+        return result
+
+    def __iter__(self):
+        for _ in range(self._batches_per_epoch):
+            ds_name = self._rng.choices(
+                list(self._sampling_rates.keys()),
+                weights=list(self._sampling_rates.values()),
+            )[0]
+            row_indices = self._get_local_row_indices(ds_name)
+            yield [
+                (ds_name, self._num_devices * idx + self._global_rank)
+                for idx in row_indices
+            ]
+            self._num_batches += 1
+
+    @property
+    def num_batches(self):
+        return self._num_batches
+
+    def __len__(self):
+        return self._batches_per_epoch
+
+
+class CsvDataset(PTDataset):
     def __init__(
         self, input_filename, transforms, img_key, caption_key, sep='\t', tokenizer=None
     ):
@@ -351,6 +451,17 @@ class ResampledShards2(IterableDataset):
                 )
 
 
+def get_wds_dataset_text(
+        args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None
+):
+    data = ArrowMultiDataset(args.train_data.split("::"))
+    sampling_rates = {i: 1.0 for i in data.lengths().keys()}
+    batch_sizes = {i: 32 for i in data.lengths().keys()}
+    sampler = MultiDatasetSampler(data.lengths(), sampling_rates, batch_sizes, args)
+
+    print("ok")
+
+
 def get_wds_dataset(
     args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None
 ):
@@ -520,7 +631,7 @@ def get_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
     return DataInfo(dataloader, sampler)
 
 
-class SyntheticDataset(Dataset):
+class SyntheticDataset(PTDataset):
     def __init__(
         self,
         transform=None,
@@ -575,7 +686,7 @@ def get_synthetic_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None
 
 def get_dataset_fn(data_path, dataset_type):
     if dataset_type == 'webdataset':
-        return get_wds_dataset
+        return get_wds_dataset_text
     elif dataset_type == 'csv':
         return get_csv_dataset
     elif dataset_type == 'synthetic':
