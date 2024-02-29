@@ -44,7 +44,7 @@ def create_optimizer(
                 _text_counter += 1
             elif is_vision_module(name):
                 lr = _vision_lr
-                descriptor = f'type=text|depth={_text_counter}|name={name}|'
+                descriptor = f'type=vision|depth={_vision_counter}|name={name}|'
                 _vision_lr *= vision_lr_decay
                 _vision_counter += 1
 
