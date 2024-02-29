@@ -1,9 +1,9 @@
 export CUDA_VISIBLE_DEVICES=1
 
 python -m training.main \
-    --train-data="/shared/datasets/laion-400m/laion400m-data-new/{00000..01720}.tar::/shared/datasets/laion-400m/laion400m-data/{00000..01200}.tar"
-    --train-num-samples 120000
-    --val-data="/shared/datasets/laion-400m/laion400m-data-new/{01721..01722}.tar"
+    --train-data="/shared/datasets/laion-400m/laion400m-data-new/{00000..01720}.tar::/shared/datasets/laion-400m/laion400m-data/{00000..01200}.tar" \
+    --train-num-samples 120000 \
+    --val-data="/shared/datasets/laion-400m/laion400m-data-new/{01721..01722}.tar" \
     --val-num-samples 12000 \
     --dataset-type webdataset \
     --batch-size 1024 \
