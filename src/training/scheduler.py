@@ -41,7 +41,7 @@ def _warmup_lr(baselr: float, step: int, warmup_steps: int) -> float:
 
 def _constant_lr(baselr: float, step: int, warmup_steps: int) -> float:
     if step < warmup_steps:
-        return _warmup_lr(baselr, warmup_steps, step)
+        return _warmup_lr(baselr, step, warmup_steps)
     return baselr
 
 
@@ -57,7 +57,7 @@ def _constant_lr_with_cooldown(
 
     start_cooldown_step = total_steps - cooldown_steps
     if step < warmup_steps:
-        return _warmup_lr(baselr, warmup_steps, step)
+        return _warmup_lr(baselr, step, warmup_steps)
 
     if step < start_cooldown_step:
         return baselr
@@ -71,7 +71,7 @@ def _constant_lr_with_cooldown(
 
 def _cosine_lr(baselr: float, step: int, warmup_steps: int, total_steps: int) -> float:
     if step < warmup_steps:
-        return _warmup_lr(baselr, warmup_steps, step)
+        return _warmup_lr(baselr, step, warmup_steps)
     e = step - warmup_steps
     es = total_steps - warmup_steps
     return 0.5 * (1 + np.cos(np.pi * e / es)) * baselr
