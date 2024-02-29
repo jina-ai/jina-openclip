@@ -27,20 +27,34 @@ def create_optimizer(
 
     params = []
     _text_lr = base_lr
+    _text_counter = 0
     _vision_lr = base_lr
+    _vision_counter = 0
 
     for name, param in reversed(list(model.named_parameters())):
         if param.requires_grad:
             _weight_decay = 0.0 if is_gain_or_bias(name, param) else weight_decay
 
             lr = base_lr
+            descriptor = ''
             if is_text_module(name):
                 lr = _text_lr
+                descriptor = f'type=text|depth={_text_counter}|name={name}|'
                 _text_lr *= text_lr_decay
+                _text_counter += 1
             elif is_vision_module(name):
                 lr = _vision_lr
+                descriptor = f'type=text|depth={_text_counter}|name={name}|'
                 _vision_lr *= vision_lr_decay
+                _vision_counter += 1
 
-            params.append({'params': param, 'lr': lr, 'weight_decay': _weight_decay})
+            params.append(
+                {
+                    'params': param,
+                    'lr': lr,
+                    'weight_decay': _weight_decay,
+                    '###logging_descriptor': descriptor,
+                }
+            )
 
     return optim.AdamW(params, betas=(beta1, beta2), eps=eps)

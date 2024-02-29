@@ -264,8 +264,8 @@ def train_one_epoch(
             }
             logdata.update(
                 {
-                    f'lr-{i}': pgroup['lr']
-                    for i, pgroup in enumerate(optimizer.param_groups)
+                    f'lr/{pgroup["###logging_descriptor"]}': pgroup['lr']
+                    for pgroup in optimizer.param_groups
                 }
             )
             logdata.update({name: val.val for name, val in losses_m.items()})
