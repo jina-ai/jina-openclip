@@ -249,7 +249,7 @@ def train_one_epoch(
                 f"Data (t): {data_time_m.avg:.3f} "
                 f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, "
                 f"{samples_per_second_per_gpu:#g}/s/gpu "
-                f"LR: {optimizer.param_groups[0]['lr']:5f} "
+                f"LR: {optimizer.param_groups[-1]['lr']:5f} "
                 f"Logit Scale: {logit_scale_scalar:.3f} " + loss_log
             )
 
@@ -261,8 +261,13 @@ def train_one_epoch(
                 'samples_per_second': samples_per_second,
                 'samples_per_second_per_gpu': samples_per_second_per_gpu,
                 'scale': logit_scale_scalar,
-                'lr': optimizer.param_groups[0]['lr'],
             }
+            logdata.update(
+                {
+                    f'lr/{pgroup["###logging_descriptor"]}': pgroup['lr']
+                    for pgroup in optimizer.param_groups
+                }
+            )
             logdata.update({name: val.val for name, val in losses_m.items()})
 
             logdata = {'train/' + name: val for name, val in logdata.items()}
