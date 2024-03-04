@@ -20,10 +20,18 @@ def create_optimizer(
     )
 
     def is_text_module(n: str):
-        return n.startswith('text') or n.startswith('transformer')
+        return (
+            n.startswith('text')
+            or n.startswith('transformer')
+            or n.startswith('module.text')  # for torch.DistributedDataParallel
+            or n.startswith('module.transformer')  # for torch.DistributedDataParallel
+        )
 
     def is_vision_module(n: str):
-        return n.startswith('visual')
+        return (
+            n.startswith('visual')
+            or n.startswith('module.visual')  # for torch.DistributedDataParallel
+        )
 
     params = []
     _text_lr = base_lr
