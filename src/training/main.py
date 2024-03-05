@@ -32,6 +32,7 @@ from open_clip import (
     get_tokenizer,
     trace_model,
 )
+
 from training.data import get_data
 from training.distributed import broadcast_object, init_distributed_device, is_master
 from training.evaluate import evaluate
@@ -273,6 +274,7 @@ def main(args):
         aug_cfg=args.aug_cfg,
         pretrained_image=args.pretrained_image,
         output_dict=True,
+        pretrained_hf=args.hf_load_pretrained,
         **model_kwargs,
     )
     if args.distill:
@@ -383,7 +385,7 @@ def main(args):
             start_epoch = checkpoint['epoch']
             sd = checkpoint['state_dict']
             if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
-                sd = {k[len('module.'):]: v for k, v in sd.items()}
+                sd = {k[len('module.') :]: v for k, v in sd.items()}
             model.load_state_dict(sd)
             if optimizer is not None:
                 optimizer.load_state_dict(checkpoint['optimizer'])
@@ -410,7 +412,6 @@ def main(args):
     # create scheduler if train
     scheduler = None
     if 'train' in data and optimizer is not None:
-
         total_steps = (
             data['train'].dataloader.num_batches // args.accum_freq
         ) * args.epochs

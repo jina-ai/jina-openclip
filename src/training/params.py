@@ -151,7 +151,7 @@ def parse_args(args):
         help=(
             'Layerwise Learning Rate Decay (LLRD) factor for the text tower. '
             'Value of 1.0 means no LLRD'
-        )
+        ),
     )
     parser.add_argument(
         '--vision-lr-decay',
@@ -160,7 +160,7 @@ def parse_args(args):
         help=(
             'Layerwise Learning Rate Decay (LLRD) factor for the vision tower. '
             'Value of 1.0 means no LLRD'
-        )
+        ),
     )
     parser.add_argument(
         '--use-bn-sync',
@@ -266,6 +266,12 @@ def parse_args(args):
         default=False,
         action='store_true',
         help='Load imagenet pretrained weights for image tower backbone if available.',
+    )
+    parser.add_argument(
+        '--hf-load-pretrained',
+        default=True,
+        action='store_false',
+        help='Randomly initialize the weights for a hugging face text tower backbone if needed.',
     )
     parser.add_argument(
         '--lock-image',
@@ -474,6 +480,18 @@ def parse_args(args):
     )
     parser.add_argument(
         '--coca-contrastive-loss-weight',
+        type=float,
+        default=1.0,
+        help='Weight assigned to contrastive loss when training CoCa.',
+    )
+    parser.add_argument(
+        '--3towers-cos-embeddings-loss-weight',
+        type=float,
+        default=2.0,
+        help='Weight assigned to caption loss in CoCa.',
+    )
+    parser.add_argument(
+        '--3towers-contrastive-loss-weight',
         type=float,
         default=1.0,
         help='Weight assigned to contrastive loss when training CoCa.',
