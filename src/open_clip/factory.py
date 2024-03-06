@@ -10,7 +10,14 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 
 from .coca_model import CoCa
-from .loss import ClipLoss, CoCaLoss, DistillClipLoss, SigLipLoss, ThreeTowerLoss
+from .loss import (
+    ClipLoss,
+    CoCaLoss,
+    DistillClipLoss,
+    SigLipLoss,
+    ThreeTowerLoss,
+    ThreeTowersCosEmbeddingLoss,
+)
 from .model import (
     CLIP,
     CustomTextCLIP,
@@ -228,9 +235,7 @@ def create_model(
         # or 'pure' modes
         cast_dtype = get_cast_dtype(precision)
         is_hf_model = 'hf_model_name' in model_cfg.get('text_cfg', {})
-        if is_hf_model and not (
-            isinstance(model_cfg['text_cfg'].get('hf_model_pretrained'), bool)
-        ):
+        if is_hf_model:
             # load pretrained weights for HF text model IFF no CLIP weights being loaded
             model_cfg['text_cfg']['hf_model_pretrained'] = (
                 pretrained_hf and not pretrained
@@ -352,6 +357,17 @@ def create_loss(args):
     elif 'coca' in args.model.lower():
         return CoCaLoss(
             caption_loss_weight=args.coca_caption_loss_weight,
+            clip_loss_weight=args.coca_contrastive_loss_weight,
+            local_loss=args.local_loss,
+            gather_with_grad=args.gather_with_grad,
+            cache_labels=True,
+            rank=args.rank,
+            world_size=args.world_size,
+            use_horovod=args.horovod,
+        )
+    elif '3towers-text' in args.model.lower():
+        return ThreeTowersCosEmbeddingLoss(
+            mse_loss_weight=args.coca_caption_loss_weight,
             clip_loss_weight=args.coca_contrastive_loss_weight,
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,

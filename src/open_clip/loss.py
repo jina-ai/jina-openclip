@@ -187,6 +187,55 @@ class ClipLoss(nn.Module):
         return {'contrastive_loss': total_loss} if output_dict else total_loss
 
 
+class ThreeTowersCosEmbeddingLoss(ClipLoss):
+    def __init__(
+        self,
+        mse_loss_weight,
+        clip_loss_weight,
+        pad_id=0,  # pad_token for open_clip custom tokenizer
+        local_loss=False,
+        gather_with_grad=False,
+        cache_labels=False,
+        rank=0,
+        world_size=1,
+        use_horovod=False,
+    ):
+        super().__init__(
+            local_loss=local_loss,
+            gather_with_grad=gather_with_grad,
+            cache_labels=cache_labels,
+            rank=rank,
+            world_size=world_size,
+            use_horovod=use_horovod,
+        )
+
+        self.clip_loss_weight = clip_loss_weight
+        self.mse_loss_weight = mse_loss_weight
+        self.mse_loss = nn.CosineEmbeddingLoss()
+
+    def forward(
+        self,
+        image_features,
+        text_features,
+        teacher_features,
+        logit_scale,
+        output_dict=False,
+    ):
+        clip_loss = torch.tensor(0)
+        target = torch.ones(teacher_features.shape[0]).to(torch.device('cuda'))
+        if self.clip_loss_weight:
+            clip_loss = super().forward(image_features, text_features, logit_scale)
+            clip_loss = self.clip_loss_weight * clip_loss
+
+        mse_loss = self.mse_loss(text_features, teacher_features, target)
+        mse_loss = mse_loss * self.mse_loss_weight * logit_scale
+
+        if output_dict:
+            return {'contrastive_loss': clip_loss, 'mse_loss': mse_loss}
+
+        return clip_loss, mse_loss
+
+
 class ThreeTowerLoss(nn.Module):
     def __init__(
         self,
