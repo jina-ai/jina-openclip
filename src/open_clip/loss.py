@@ -249,7 +249,7 @@ class MTLPairLoss(nn.Module):
     ):
         super(MTLPairLoss, self).__init__()
 
-        self.clip_loss = ClipLoss(
+        self._clip_loss = ClipLoss(
             local_loss=local_loss,
             gather_with_grad=gather_with_grad,
             cache_labels=cache_labels,
@@ -257,12 +257,12 @@ class MTLPairLoss(nn.Module):
             world_size=world_size,
             use_horovod=use_horovod,
         )
-        self.clip_loss_weight = clip_loss_weight
+        self._clip_loss_weight = clip_loss_weight
 
-        self.pair_loss = InfoNCELoss(
+        self._pair_loss = InfoNCELoss(
             temperature=temperature, bidirectional=bidirectional
         )
-        self.pair_loss_weight = pair_loss_weight
+        self._pair_loss_weight = pair_loss_weight
 
     def forward(
         self,
@@ -274,14 +274,14 @@ class MTLPairLoss(nn.Module):
         clip_loss = torch.tensor(0)
 
         if multimodal_pair:
-            clip_loss = self.clip_loss(
+            clip_loss = self._clip_loss(
                 multimodal_pair[0], multimodal_pair[1], logit_scale
             )
-            clip_loss = self.clip_loss_weight * clip_loss
+            clip_loss = self._clip_loss_weight * clip_loss
 
         if text_pair:
-            pair_loss = self.pair_loss(text_pair[0], text_pair[1])
-            pair_loss = pair_loss * self.pair_loss_weight
+            pair_loss = self._pair_loss(text_pair[0], text_pair[1])
+            pair_loss = pair_loss * self._pair_loss_weight
 
         if output_dict:
             return {'multimodal_loss': clip_loss, 'pair_loss': pair_loss}

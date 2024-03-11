@@ -14,6 +14,7 @@ from .loss import (
     ClipLoss,
     CoCaLoss,
     DistillClipLoss,
+    MTLPairLoss,
     SigLipLoss,
     ThreeTowerLoss,
     ThreeTowersCosEmbeddingLoss,
@@ -363,6 +364,19 @@ def create_loss(args):
         return CoCaLoss(
             caption_loss_weight=args.coca_caption_loss_weight,
             clip_loss_weight=args.coca_contrastive_loss_weight,
+            local_loss=args.local_loss,
+            gather_with_grad=args.gather_with_grad,
+            cache_labels=True,
+            rank=args.rank,
+            world_size=args.world_size,
+            use_horovod=args.horovod,
+        )
+    elif 'mtl-pair' in args.model_lower():
+        return MTLPairLoss(
+            pair_loss_weight=args.mtl_pair_loss_weight,
+            temperature=args.temperature_pair_loss,
+            bidirectional=args.bidirectional_pair_loss,
+            clip_loss_weight=args.mtl_clip_loss_weight,
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
             cache_labels=True,
