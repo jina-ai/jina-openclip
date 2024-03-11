@@ -26,6 +26,7 @@ from .model import (
     load_checkpoint,
     set_model_preprocess_cfg,
 )
+from .mtl_model import MTLPairCLIP
 from .multi_tower_model import ThreeTowersCustomTextCLIP
 from .openai import load_openai_model
 from .pretrained import (
@@ -252,6 +253,10 @@ def create_model(
                 model = CoCa(**model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir)
             elif 'teacher_cfg' in model_cfg:
                 model = ThreeTowersCustomTextCLIP(
+                    **model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir
+                )
+            elif 'mtl_training' in model_cfg:
+                model = MTLPairCLIP(
                     **model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir
                 )
             else:
