@@ -266,25 +266,25 @@ class MTLPairLoss(nn.Module):
 
     def forward(
         self,
-        multimodal_pair,
-        text_pair,
+        image_features,
+        text_features,
+        embedding_batch_features,
         logit_scale,
         output_dict=False,
     ):
         clip_loss = torch.tensor(0)
+        pair_loss = torch.tensor(0)
 
-        if multimodal_pair:
-            clip_loss = self._clip_loss(
-                multimodal_pair[0], multimodal_pair[1], logit_scale
-            )
+        if image_features is not None and text_features is not None:
+            clip_loss = self._clip_loss(image_features, text_features, logit_scale)
             clip_loss = self._clip_loss_weight * clip_loss
 
-        if text_pair:
-            pair_loss = self._pair_loss(text_pair[0], text_pair[1])
+        if embedding_batch_features is not None:
+            pair_loss = self._pair_loss(*embedding_batch_features)
             pair_loss = pair_loss * self._pair_loss_weight
 
         if output_dict:
-            return {'multimodal_loss': clip_loss, 'pair_loss': pair_loss}
+            return {'multimodal_loss': clip_loss, 'text_pair_loss': pair_loss}
 
         return clip_loss, pair_loss
 

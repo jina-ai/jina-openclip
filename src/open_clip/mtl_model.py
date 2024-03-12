@@ -1,9 +1,10 @@
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
 import torch.nn.functional as f
 from torch import nn
+from transformers.tokenization_utils import BatchEncoding
 
 from .hf_model import HFTextEncoder
 from .model import (
@@ -22,7 +23,6 @@ class MTLPairCLIP(CustomTextCLIP):
         embed_dim: int,
         vision_cfg: CLIPVisionCfg,
         text_cfg: CLIPTextCfg,
-        teacher_cfg: Union[CLIPVisionCfg, CLIPTextCfg],
         quick_gelu: bool = False,
         init_logit_scale: float = np.log(1 / 0.07),
         init_logit_bias: Optional[float] = None,
@@ -47,6 +47,7 @@ class MTLPairCLIP(CustomTextCLIP):
         self,
         image: Optional[torch.Tensor] = None,
         text: Optional[torch.Tensor] = None,
+        embedding_batch: Optional[List[BatchEncoding]] = None,
     ):
         image_features = (
             self.encode_image(image, normalize=True) if image is not None else None
@@ -55,10 +56,17 @@ class MTLPairCLIP(CustomTextCLIP):
             self.encode_text(text, normalize=True) if text is not None else None
         )
 
+        embedding_batch_features = (
+            [self.encode_text(embedding) for embedding in embedding_batch]
+            if embedding_batch is not None
+            else None
+        )
+
         if self.output_dict:
             out_dict = {
                 'image_features': image_features,
                 'text_features': text_features,
+                'embedding_batch_features': embedding_batch_features,
                 'logit_scale': self.logit_scale.exp(),
             }
             if self.logit_bias is not None:
@@ -69,7 +77,13 @@ class MTLPairCLIP(CustomTextCLIP):
             return (
                 image_features,
                 text_features,
+                embedding_batch_features,
                 self.logit_scale.exp(),
                 self.logit_bias,
             )
-        return image_features, text_features, self.logit_scale.exp()
+        return (
+            image_features,
+            text_features,
+            embedding_batch_features,
+            self.logit_scale.exp(),
+        )
