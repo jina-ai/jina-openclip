@@ -1,15 +1,20 @@
 import glob
+import json
 import logging
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
+from functools import partial
 
 import numpy as np
 import torch
 from torch.cuda.amp import GradScaler
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
 
 try:
     import wandb
@@ -33,7 +38,7 @@ from open_clip import (
     trace_model,
 )
 
-from training.data import get_data
+from training.data import dynamic_collate, get_multimodal_data, MultiS3EmbeddingDataset
 from training.distributed import broadcast_object, init_distributed_device, is_master
 from training.evaluate import evaluate
 from training.fileutils import pt_load, remote_sync, start_sync_process
@@ -79,6 +84,99 @@ def get_latest_checkpoint(path: str, remote: bool):
         checkpoints = sorted(checkpoints, key=natural_key)
         return checkpoints[-1]
     return None
+
+
+def create_embeddings_dataloader(args):
+    # emb_tokenizer_name,
+    # emb_tokenizer_max_length
+
+    import training.embloss as embeddings_loss_module
+
+    embeddings_dataset = None
+
+    try:
+        loss_init = json.loads(args.emb_losses)
+    except json.JSONDecodeError:
+        loss_init = [{'name': loss} for loss in args.emb_losses.split(',')]
+
+    loss_init = loss_init or [{'name': 'InfoNCELoss'}]
+
+    for d in loss_init:
+        d['name'] = getattr(embeddings_loss_module, d['name'])
+        if 'tasks' not in d:
+            d['tasks'] = '*'
+        if 'options' not in d:
+            d['options'] = {}
+
+    task_dict = {
+        task: d['name'](**d['options']) for d in loss_init for task in d['tasks']
+    }
+    input_type_dict = {k: v.input_type for (k, v) in task_dict.items()}
+
+    for loss_fn in task_dict.values():
+        logging.info(f'Setting up loss: {loss_fn.__class__.__name__}')
+
+    logging.info('Building embedding dataset ...')
+    if args.resume:
+        embeddings_dataset_checkpoint = os.path.join(
+            args.resume, f'worker{args.rank}-dataset.json'
+        )
+        if os.path.isfile(embeddings_dataset_checkpoint):
+            logging.info(
+                f'Loading from checkpoint {embeddings_dataset_checkpoint} ...'
+            )
+            embeddings_dataset = MultiS3EmbeddingDataset.load_from_json(
+                embeddings_dataset_checkpoint,
+                world_size=args.world_size,
+                global_rank=args.rank,
+            )
+    if embeddings_dataset is None:
+        logging.info(
+            f'Bucket: {args.emb_datasets_s3_bucket}, Datasets: {args.emb_datasets}'
+        )
+        datasets = args.emb_datasets.split(',')
+        sampling_rates = [float(v) for v in args.emb_sampling_rates.split(',')]
+        sampling_rates = {
+            dataset: sr for dataset, sr in zip(datasets, sampling_rates)
+        }
+        embeddings_dataset = MultiS3EmbeddingDataset(
+            bucket=args.emb_datasets_s3_bucket,
+            batch_size=args.emb_batch_size,
+            input_type_dict=input_type_dict,
+            datasets=datasets,
+            max_shards=args.emb_max_shards,
+            world_size=args.world_size,
+            global_rank=args.rank,
+            sampling_rates=sampling_rates,
+            num_batches=args.emb_num_batches,
+            max_batches=args.emb_max_batches,
+            seed=args.seed,
+            synchronous=args.emb_global_batch,
+        )
+
+    logging.info('Setting up the embedding dataloader')
+
+    embeddings_tokenizer = AutoTokenizer.from_pretrained(
+        args.emb_tokenizer_name, force_download=True
+    )
+    embeddings_dataloader = DataLoader(
+        dataset=embeddings_dataset,
+        collate_fn=partial(
+            dynamic_collate,
+            tokenizer=embeddings_tokenizer,
+            tokenizer_options={
+                'padding': True,
+                'truncation': True,
+                'max_length': args.emb_tokenizer_max_length,
+                'return_tensors': 'pt',
+            },
+            input_type_dict=input_type_dict,
+        ),
+        batch_size=args.emb_batch_size,
+        pin_memory=True,
+    )
+
+    return embeddings_dataset, embeddings_dataloader, task_dict
 
 
 def main(args):
@@ -252,11 +350,13 @@ def main(args):
     ):
         # arg is nargs, single (square) image size list -> int
         args.force_image_size = args.force_image_size[0]
+
     random_seed(args.seed, 0)
     model_kwargs = {}
     if args.siglip:
         model_kwargs['init_logit_scale'] = np.log(10)  # different from CLIP
         model_kwargs['init_logit_bias'] = -10
+
     model, preprocess_train, preprocess_val = create_model_and_transforms(
         args.model,
         args.pretrained,
@@ -324,6 +424,7 @@ def main(args):
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
 
+    params_file = ''
     if is_master(args):
         logging.info('Model:')
         logging.info(f'{str(model)}')
@@ -385,7 +486,7 @@ def main(args):
             start_epoch = checkpoint['epoch']
             sd = checkpoint['state_dict']
             if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
-                sd = {k[len('module.') :]: v for k, v in sd.items()}
+                sd = {k[len('module.'):]: v for k, v in sd.items()}
             model.load_state_dict(sd)
             if optimizer is not None:
                 optimizer.load_state_dict(checkpoint['optimizer'])
@@ -400,14 +501,21 @@ def main(args):
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
     # initialize datasets
+    # multimodal
     tokenizer = get_tokenizer(args.model)
-    data = get_data(
+    data = get_multimodal_data(
         args,
         (preprocess_train, preprocess_val),
         epoch=start_epoch,
         tokenizer=tokenizer,
     )
-    assert len(data), 'At least one train or eval dataset must be specified.'
+    assert len(data), (
+        'At least one train or eval dataset must be specified.'
+    )
+
+    emb_dataset, emb_dataloader, emb_losses = None, None, None
+    if args.mtl:
+        emb_dataset, emb_dataloader, emb_losses = create_embeddings_dataloader(args)
 
     # create scheduler if train
     scheduler = None
@@ -441,10 +549,11 @@ def main(args):
 
     if args.wandb and is_master(args):
         assert wandb is not None, 'Please install wandb.'
-        logging.debug('Starting wandb.')
+        logging.debug('Starting WandB ...')
         args.train_sz = data['train'].dataloader.num_samples
         if args.val_data is not None:
             args.val_sz = data['val'].dataloader.num_samples
+
         # you will have to configure this for your project!
         wandb.init(
             project=args.wandb_project_name,
@@ -458,7 +567,7 @@ def main(args):
         if args.debug:
             wandb.watch(model, log='all')
         wandb.save(params_file)
-        logging.debug('Finished loading wandb.')
+        logging.debug('Finished loading WandB')
 
     # Pytorch 2.0 adds '_orig_mod.' prefix to keys of state_dict() of compiled models.
     # For compatibility, we save state_dict() of the original model, which shares the
@@ -474,6 +583,7 @@ def main(args):
             from open_clip.utils import convert_int8_model_to_inference_mode
 
             convert_int8_model_to_inference_mode(model)
+
         # Evaluate.
         evaluate(
             model,
@@ -513,6 +623,8 @@ def main(args):
             scheduler,
             dist_model,
             args,
+            emb_dataloader=emb_dataloader,
+            emb_losses=emb_losses,
             tb_writer=writer,
         )
         completed_epoch = epoch + 1
@@ -531,16 +643,26 @@ def main(args):
             if completed_epoch == args.epochs or (
                 args.save_frequency > 0 and (completed_epoch % args.save_frequency) == 0
             ):
-                torch.save(
-                    checkpoint_dict,
-                    os.path.join(args.checkpoint_path, f'epoch_{completed_epoch}.pt'),
+                ckpt_dir = f'epoch-{completed_epoch}'
+                os.makedirs(ckpt_dir, exist_ok=False)
+                model_ckpt_path = os.path.join(
+                    args.checkpoint_path, ckpt_dir, f'state.pt'
                 )
+                torch.save(checkpoint_dict, model_ckpt_path)
+                if emb_dataset is not None:
+                    dataset_ckpt_path = os.path.join(
+                        args.checkpoint_path,
+                        ckpt_dir,
+                        f'worker{args.rank}-dataset.json'
+                    )
+                    emb_dataset.write_to_json(dataset_ckpt_path)
+
             if args.delete_previous_checkpoint:
                 previous_checkpoint = os.path.join(
-                    args.checkpoint_path, f'epoch_{completed_epoch - 1}.pt'
+                    args.checkpoint_path, f'epoch-{completed_epoch - 1}'
                 )
                 if os.path.exists(previous_checkpoint):
-                    os.remove(previous_checkpoint)
+                    shutil.rmtree(previous_checkpoint)
 
             if args.save_most_recent:
                 # try not to corrupt the latest checkpoint if save fails

@@ -594,7 +594,7 @@ def get_dataset_fn(data_path, dataset_type):
         raise ValueError(f'Unsupported dataset type: {dataset_type}')
 
 
-def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
+def get_multimodal_data(args, preprocess_fns, epoch=0, tokenizer=None):
     preprocess_train, preprocess_val = preprocess_fns
     data = {}
 

@@ -1,8 +1,10 @@
 import logging
 import math
 import time
+from itertools import islice
 
 import torch
+from torch import nn
 
 try:
     import wandb
@@ -11,7 +13,7 @@ except ImportError:
 
 from open_clip import get_input_dtype
 
-from .distributed import is_master
+from .distributed import is_master, all_gather_object
 from .precision import get_autocast
 
 
@@ -60,6 +62,67 @@ def backward(total_loss, scaler):
         total_loss.backward()
 
 
+def get_global_batch_grads(
+    embedding_batches: list[torch.Tensor],
+    loss_fn: nn.Module,
+    args,
+) -> tuple[list[torch.Tensor], torch.Tensor]:
+    """
+    Gather embeddings from all devices and compute gradients w.r.t. global batch.
+
+    This function will gather the embeddings from all devices and evaluate `loss_fn` on
+    *all* embeddings jointly. Then, we backpropagate the loss onto the gathered
+    embeddings and return the gradients belonging to the embeddings of the local
+    device. This only works for loss functions not requiring "labels". I.e., this won't
+    work for distillation losses, hard negative losses with ragged input, etc.
+
+    :param embedding_batches: List of embedding tensors,
+        e.g. [left_embeddings, right_embeddings]
+    :param loss_fn: Module that would accept `*embedding_batches`
+    :param args: Arguments
+    :return: Tuple of loss and its gradient
+        The `loss_fn` is differentiated w.r.t. the tensors in `embedding_batches`
+        after computing the loss over embeddings gathered from all devices.
+    """
+    global_embedding_batches = all_gather_object(args, embedding_batches)
+    # flatten the device dimension
+    global_embedding_batches = [
+        b.reshape((-1, *b.shape[2:])).requires_grad_() for b in global_embedding_batches
+    ]
+    loss = loss_fn(*global_embedding_batches)
+    loss.backward()
+    # only take the gradients that belong to embeddings from this device
+    grads = [
+        b.grad.reshape((args.world_size, -1, *b.shape[1:]))[args.rank]
+        for b in global_embedding_batches
+    ]
+    return grads, loss
+
+
+def get_surrogate_loss(
+    embeddings: list[torch.Tensor], gradients: list[torch.Tensor],
+):
+    """
+    Perform backward pass given embeddings and corresponding gradients.
+
+    :param embeddings: A list of embeddings, e.g. `[left, right]`
+    :param gradients: Gradients of a loss functions w.r.t. `embeddings`
+    :return:
+    """
+    flat_embeddings = torch.cat([o.flatten() for o in embeddings])
+    flat_grads = torch.cat([g.flatten() for g in gradients])
+    return torch.dot(flat_embeddings, flat_grads)
+
+
+class DummyEmbeddingsDataloader:
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return None, (None, None)
+
+
 def train_one_epoch(
     model,
     data,
@@ -70,6 +133,8 @@ def train_one_epoch(
     scheduler,
     dist_model,
     args,
+    emb_dataloader=None,
+    emb_losses=None,
     tb_writer=None,
 ):
     device = torch.device(args.device)
@@ -80,35 +145,56 @@ def train_one_epoch(
     if args.distill:
         dist_model.eval()
 
+    if args.mtl:
+        assert emb_dataloader is not None
+        assert emb_losses is not None
+    else:
+        emb_dataloader = DummyEmbeddingsDataloader()
+
     # set epoch in process safe manner via sampler or shared_epoch
     data['train'].set_epoch(epoch)
     dataloader = data['train'].dataloader
     num_batches_per_epoch = dataloader.num_batches // args.accum_freq
     sample_digits = math.ceil(math.log(dataloader.num_samples + 1, 10))
 
-    if args.accum_freq > 1:
-        accum_images, accum_texts, accum_features = [], [], {}
+    accum_images, accum_texts, accum_features = [], [], {}
+    accum_emb_datasets, accum_emb_batches, accum_emb_labels, accum_embeddings = (
+        [], [], [], []
+    )
 
     losses_m = {}
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
-    for i, batch in enumerate(dataloader):
+
+    for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels))) in enumerate(zip(
+        dataloader, islice(emb_dataloader, 1, None)
+    )):
+
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
 
         if not args.skip_scheduler:
             scheduler(step)
 
-        images, texts = batch
+        images, texts = mm_batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
+        if emb_batch:
+            emb_batch = emb_batch.to(device=device, non_blocking=True)
+        if emb_labels:
+            emb_labels = emb_labels.to(device=device, non_blocking=True)
 
         data_time_m.update(time.time() - end)
+
         optimizer.zero_grad()
 
         if args.accum_freq == 1:
+
+            # WITHOUT Gradient Accumulation
+
             with autocast():
+
                 model_out = model(images, texts)
                 logit_scale = model_out['logit_scale']
                 if args.distill:
@@ -118,12 +204,37 @@ def train_one_epoch(
                         {f'dist_{k}': v for k, v in dist_model_out.items()}
                     )
                 losses = loss(**model_out, output_dict=True)
+                contrastive_loss = sum(losses.values())
 
-                total_loss = sum(losses.values())
-                losses['loss'] = total_loss
+                losses['contrastive_loss'] = contrastive_loss
+                total_loss = contrastive_loss
 
+                if args.mtl:
+                    emb_loss_fn = (
+                        emb_losses[emb_dataset]
+                        if emb_dataset in emb_losses else emb_losses['*']
+                    )
+
+                    embeddings = model(emb_batch)
+                    if args.emb_global_batch:
+                        assert len(emb_labels) == 0
+                        grads, _ = get_global_batch_grads(
+                            embeddings, emb_loss_fn, args
+                        )
+                        embedding_loss = get_surrogate_loss(embeddings, grads)
+                    else:
+                        embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
+
+                    losses['embedding_loss'] = embedding_loss
+                    total_loss += args.emb_loss_weight * embedding_loss
+
+            losses['loss'] = total_loss
             backward(total_loss, scaler)
+
         else:
+
+            # WITH Gradient Accumulation
+
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
                 with autocast():
@@ -138,8 +249,20 @@ def train_one_epoch(
                         else:
                             accum_features[key] = [val]
 
+                    if args.mtl:
+                        embeddings = model(emb_batch)
+                        for j, embedding in enumerate(embeddings):
+                            if len(accum_embeddings) == 0:
+                                accum_embeddings.append([embedding])
+                            else:
+                                accum_embeddings[j].append(embedding)
+
                 accum_images.append(images)
                 accum_texts.append(texts)
+                if args.mtl:
+                    accum_emb_datasets.append(emb_dataset)
+                    accum_emb_labels.append(emb_labels)
+                    accum_emb_batches.append(emb_batch)
 
             # If (i + 1) % accum_freq is not zero, move on to the next batch.
             if ((i + 1) % args.accum_freq) > 0:
@@ -151,9 +274,10 @@ def train_one_epoch(
             # from the other batches as negatives.
             # Call backwards each time, but only step optimizer at the end.
             optimizer.zero_grad()
-            for j in range(args.accum_freq):
-                images = accum_images[j]
-                texts = accum_texts[j]
+
+            for k in range(args.accum_freq):
+                images = accum_images[k]
+                texts = accum_texts[k]
                 with autocast():
                     model_out = model(images, texts)
 
@@ -168,14 +292,43 @@ def train_one_epoch(
                     for key, val in accum_features.items():
                         accumulated = accum_features[key]
                         inputs[key] = torch.cat(
-                            accumulated[:j] + [model_out[key]] + accumulated[j + 1 :]
+                            accumulated[:k] + [model_out[key]] + accumulated[k+1:]
                         )
 
                     losses = loss(**inputs, **inputs_no_accum, output_dict=True)
                     del inputs
                     del inputs_no_accum
-                    total_loss = sum(losses.values())
-                    losses['loss'] = total_loss
+                    contrastive_loss = sum(losses.values())
+                    losses['contrastive_loss'] = contrastive_loss
+                    total_loss = contrastive_loss
+
+                    if args.mtl:
+                        _emb_dataset = accum_emb_datasets[k]
+                        _emb_batch = accum_emb_batches[k]
+                        _emb_loss_fn = (
+                            emb_losses[_emb_dataset]
+                            if emb_dataset in emb_losses else emb_losses['*']
+                        )
+                        _embeddings = model(_emb_batch)
+
+                        inputs = []
+                        for val in accum_embeddings:
+                            inputs.append(
+                                torch.cat(val[:k] + [_embeddings] + val[k+1:])
+                            )
+                        labels = torch.cat(accum_emb_labels)
+
+                        if args.emb_global_batch:
+                            assert len(labels) == 0
+                            grads, _ = get_global_batch_grads(
+                                inputs, emb_loss_fn, args
+                            )
+                            embedding_loss = get_surrogate_loss(inputs, grads)
+                        else:
+                            embedding_loss = emb_loss_fn(*inputs, *labels)
+
+                        losses['embedding_loss'] = embedding_loss
+                        total_loss += args.emb_loss_weight * embedding_loss
 
                 backward(total_loss, scaler)
 
@@ -207,6 +360,12 @@ def train_one_epoch(
         # reset gradient accum, if enabled
         if args.accum_freq > 1:
             accum_images, accum_texts, accum_features = [], [], {}
+            (
+                accum_emb_datasets,
+                accum_emb_batches,
+                accum_emb_labels,
+                accum_embeddings
+            ) = [], [], [], []
 
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.
         with torch.no_grad():
@@ -215,6 +374,7 @@ def train_one_epoch(
         batch_time_m.update(time.time() - end)
         end = time.time()
         batch_count = i_accum + 1
+
         if is_master(args) and (
             i_accum % args.log_every_n_steps == 0
             or batch_count == num_batches_per_epoch

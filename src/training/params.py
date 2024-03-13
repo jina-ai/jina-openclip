@@ -581,6 +581,84 @@ def parse_args(args):
         default=8192,
         help='The max sequence length used during MTEB evaluation.',
     )
+    parser.add_argument(
+        '--mtl',
+        default=False,
+        action='store_true',
+        help='Train jointly with Multi Task Learning.',
+    )
+    parser.add_argument(
+        '--emb-datasets',
+        type=str,
+        default='',
+        help='Comma separated list of embedding datasets.',
+    )
+    parser.add_argument(
+        '--emb-losses',
+        type=str,
+        default='',
+        help='Comma separated or JSON list of loss functions to use.',
+    )
+    parser.add_argument(
+        '--emb-datasets-s3-bucket',
+        type=str,
+        default='embedding-datasets',
+        help='The S3 bucket with the embeddings datasets.',
+    )
+    parser.add_argument(
+        '--emb-sampling-rates',
+        type=str,
+        default='',
+        help='Comma separated list of sampling rates.',
+    )
+    parser.add_argument(
+        '--emb-batch-size',
+        type=int,
+        default=128,
+        help='The batch size of the embedding dataloader.',
+    )
+    parser.add_argument(
+        '--emb-tokenizer-name',
+        type=str,
+        default='',
+        help='The tokenizer to use for the embedding dataloader.',
+    )
+    parser.add_argument(
+        '--emb-tokenizer-max-length',
+        type=int,
+        default=128,
+        help='The max sequence length of the embedding dataloader.',
+    )
+    parser.add_argument(
+        '--emb-max-shards',
+        type=int,
+        default=None,
+        help='The max shards of the embedding dataloader.',
+    )
+    parser.add_argument(
+        '--emb-num-batches',
+        type=int,
+        default=0,
+        help='The num batches of the embedding dataloader.',
+    )
+    parser.add_argument(
+        '--emb-max-batches',
+        type=int,
+        default=None,
+        help='The max batches of the embedding dataloader.',
+    )
+    parser.add_argument(
+        '--emb-global-batch',
+        default=False,
+        action='store_true',
+        help='Collect embeddings from all devices when calculating the loss.',
+    )
+    parser.add_argument(
+        '--emb-loss-weight',
+        type=float,
+        default=1.0,
+        help='The weighing factor for the embedding loss.',
+    )
 
     args = parser.parse_args(args)
 
