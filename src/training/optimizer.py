@@ -4,6 +4,7 @@ from torch import nn, optim
 def create_optimizer(
     model: nn.Module,
     base_lr: float,
+    base_text_lr: float,
     weight_decay: float,
     beta1: float,
     beta2: float,
@@ -34,7 +35,7 @@ def create_optimizer(
         )
 
     params = []
-    _text_lr = base_lr
+    _text_lr = base_text_lr if base_text_lr is not None else base_lr
     _text_counter = 0
     _vision_lr = base_lr
     _vision_counter = 0

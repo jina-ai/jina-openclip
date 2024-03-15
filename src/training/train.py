@@ -13,7 +13,7 @@ except ImportError:
 
 from open_clip import get_input_dtype
 
-from .distributed import is_master, all_gather_object
+from .distributed import all_gather_object, is_master
 from .precision import get_autocast
 
 
@@ -181,7 +181,8 @@ def train_one_epoch(
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
         if emb_batch:
-            emb_batch = emb_batch.to(device=device, non_blocking=True)
+            for batch in emb_batch:
+                batch.to(device=device)
         if emb_labels:
             emb_labels = emb_labels.to(device=device, non_blocking=True)
 
@@ -204,10 +205,10 @@ def train_one_epoch(
                         {f'dist_{k}': v for k, v in dist_model_out.items()}
                     )
                 losses = loss(**model_out, output_dict=True)
-                contrastive_loss = sum(losses.values())
+                #contrastive_loss = sum(losses.values())
 
-                losses['contrastive_loss'] = contrastive_loss
-                total_loss = contrastive_loss
+                #losses['contrastive_loss'] = contrastive_loss
+                #total_loss = contrastive_loss
 
                 if args.mtl:
                     emb_loss_fn = (
@@ -215,7 +216,14 @@ def train_one_epoch(
                         if emb_dataset in emb_losses else emb_losses['*']
                     )
 
-                    embeddings = model(emb_batch)
+                    embeddings = (
+                        [
+                            model.module.encode_text(embedding['input_ids'])
+                            if isinstance(model, nn.parallel.DistributedDataParallel)
+                            else model.encode_text(embedding['input_ids'])
+                            for embedding in emb_batch
+                        ]
+                    )
                     if args.emb_global_batch:
                         assert len(emb_labels) == 0
                         grads, _ = get_global_batch_grads(
@@ -225,9 +233,10 @@ def train_one_epoch(
                     else:
                         embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
 
-                    losses['embedding_loss'] = embedding_loss
-                    total_loss += args.emb_loss_weight * embedding_loss
+                    losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
+                    # total_loss += args.emb_loss_weight * embedding_loss
 
+            total_loss = sum(losses.values())
             losses['loss'] = total_loss
             backward(total_loss, scaler)
 

@@ -38,7 +38,7 @@ from open_clip import (
     trace_model,
 )
 
-from training.data import dynamic_collate, get_multimodal_data, MultiS3EmbeddingDataset
+from training.data import MultiS3EmbeddingDataset, dynamic_collate, get_multimodal_data
 from training.distributed import broadcast_object, init_distributed_device, is_master
 from training.evaluate import evaluate
 from training.fileutils import pt_load, remote_sync, start_sync_process
@@ -461,6 +461,7 @@ def main(args):
         optimizer = create_optimizer(
             model=model,
             base_lr=args.lr,
+            base_text_lr = args.text_lr,
             weight_decay=args.wd,
             beta1=args.beta1,
             beta2=args.beta2,
@@ -644,7 +645,9 @@ def main(args):
                 args.save_frequency > 0 and (completed_epoch % args.save_frequency) == 0
             ):
                 ckpt_dir = f'epoch-{completed_epoch}'
-                os.makedirs(ckpt_dir, exist_ok=False)
+                os.makedirs(
+                    os.path.join(args.checkpoint_path, ckpt_dir), exist_ok=False
+                )
                 model_ckpt_path = os.path.join(
                     args.checkpoint_path, ckpt_dir, f'state.pt'
                 )

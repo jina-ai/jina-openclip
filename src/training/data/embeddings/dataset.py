@@ -230,7 +230,7 @@ class S3EmbeddingDataset(IterableDataset):
                 if self._input_has_score:
                     scores = [float(row[-1])]
 
-                yield self._dataset, scores
+                yield self._dataset, (out, scores)
 
             file.close()
 
