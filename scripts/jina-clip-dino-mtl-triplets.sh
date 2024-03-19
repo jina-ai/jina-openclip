@@ -1,0 +1,37 @@
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
+
+torchrun --nproc_per_node 6 -m training.main \
+    --train-data="/home/admin/andreas/laion/train-part-2/{00000..14233}.tar::/home/admin/andreas/laion/train-part-3/{00000..05290}.tar::pipe:aws s3 cp s3://laion-400m-data/train/{00002..26002}.tar -" \
+    --train-num-samples 30722000 \
+    --val-data="pipe:aws s3 cp s3://laion-400m-data/data/{00000..00001}.tar -" \
+    --val-num-samples 15000 \
+    --dataset-type webdataset \
+    --batch-size 1024 \
+    --warmup 5000 \
+    --epochs 120 \
+    --lr 1e-5 \
+    --precision amp \
+    --workers 9 \
+    --model "jina-clip-ViT-B-16-dino" \
+    --force-custom-text \
+    --log-every-n-steps 20 \
+    --report-to "wandb" \
+    --name "jina-backbone-dino-ViT-B-16-locked-image-tower-triplet-tuning" \
+    --wandb-project-name "Jina-CLIP-MTL-runs" \
+    --clip-benchmark-frequency 1 \
+    --mteb-frequency 1 \
+    --mteb-tasks ArguAna,FiQA2018,NFCorpus,STS12,STS15,STS17 \
+    --evaluate-on-start \
+    --mtl \
+    --emb-datasets 'en/triplets-multiple-negatives/nli-random,en/triplets-multiple-negatives/msmarco-jina,en/triplets-multiple-negatives/nq_triplets,en/triplets-multiple-negatives/quora_hn,en/triplets-multiple-negatives/hotpotqa-jina,en/triplets-multiple-negatives/fever-jina'\
+    --emb-losses 'MultiCELoss'\
+    --emb-datasets-s3-bucket 'embedding-datasets'\
+    --emb-sampling-rates '1,1,1,1,1,1'\
+    --emb-batch-size 128\
+    --emb-tokenizer-max-length 77\
+    --lock-image \
+    --lock-image-freeze-bn-stats \
+    --grad-clip-norm 1.0 \
+    --dataset-resampled \
+    --emb-tokenizer-name "jinaai/jina-bert-b-en-v1-8k" \
+    --pretrained '/home/admin/andreas/laion/projects-jina/openclip/scripts/logs/jina-backbone-dino-ViT-B-16-locked-image-tower-2nd-run/checkpoints/epoch-37/state.pt'

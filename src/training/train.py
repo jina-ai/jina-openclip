@@ -184,7 +184,7 @@ def train_one_epoch(
             for batch in emb_batch:
                 batch.to(device=device)
         if emb_labels:
-            emb_labels = emb_labels.to(device=device, non_blocking=True)
+            emb_labels[0] = [label.to(device=device) for label in emb_labels[0]]
 
         data_time_m.update(time.time() - end)
 
