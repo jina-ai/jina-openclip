@@ -543,7 +543,7 @@ _PRETRAINED = {
     'nllb-clip-large-siglip': dict(
         v1=_slpcfg(hf_hub='visheratin/nllb-clip-large-siglip/'),
     ),
-    'jina-dino': dict(
+    'jina-clip-ViT-B-16-dino': dict(
         jina_clip=_pcfg(hf_hub='jinaai/jina-backbone-dino-ViT-B-16/'),
     ),
 }
