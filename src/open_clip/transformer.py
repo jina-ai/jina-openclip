@@ -657,7 +657,7 @@ class TextTransformer(nn.Module):
         no_causal_mask: bool = False,
         pad_id: int = 0,
         pool_type: str = 'argmax',
-        proj_type: Optional[str] = None,
+        proj_type: Optional[str] = 'linear',
         proj_bias: bool = False,
         act_layer: Callable = nn.GELU,
         norm_layer: Callable = LayerNorm,
