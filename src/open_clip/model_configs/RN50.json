@@ -16,6 +16,7 @@
         "vocab_size": 49408,
         "width": 512,
         "heads": 8,
-        "layers": 12
+        "layers": 12,
+        "proj_type": "linear"
     }
 }
