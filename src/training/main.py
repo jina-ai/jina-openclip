@@ -481,7 +481,7 @@ def main(args):
     # optionally resume from a checkpoint
     start_epoch = 0
     if args.resume is not None:
-        checkpoint = pt_load(args.resume, map_location='cpu')
+        checkpoint = pt_load(os.path.join(args.resume, 'state.pt'), map_location='cpu')
         if 'epoch' in checkpoint:
             # resuming a train checkpoint w/ epoch and optimizer state
             start_epoch = checkpoint['epoch']
