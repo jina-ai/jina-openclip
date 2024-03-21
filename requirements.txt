@@ -7,3 +7,5 @@ huggingface_hub
 sentencepiece
 protobuf
 timm
+einops
+transformers
