@@ -9,7 +9,7 @@ import math
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -154,7 +154,7 @@ def load_checkpoint(
     checkpoint_path: str,
     strict: bool = True,
     root: Optional[str] = None,
-    exclude: Optional[list[str]] = None,
+    exclude: Optional[List[str]] = None,
 ):
     if Path(checkpoint_path).suffix in ('.npz', '.npy'):
         from .big_vision import load_big_vision_weights
@@ -698,7 +698,7 @@ def build_model_from_openai_state_dict(
         )
         image_size = vision_patch_size * grid_size
     else:
-        counts: list = [
+        counts: List = [
             len(
                 set(
                     k.split('.')[2]
