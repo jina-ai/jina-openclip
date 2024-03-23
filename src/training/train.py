@@ -12,6 +12,7 @@ except ImportError:
     wandb = None
 
 from open_clip import get_input_dtype
+from open_clip.loss import GatherFeatures
 
 from .distributed import all_gather_object, is_master
 from .precision import get_autocast
@@ -84,7 +85,14 @@ def get_global_batch_grads(
         The `loss_fn` is differentiated w.r.t. the tensors in `embedding_batches`
         after computing the loss over embeddings gathered from all devices.
     """
-    global_embedding_batches = all_gather_object(args, embedding_batches)
+    gather = GatherFeatures(
+        local_loss=args.local_loss,
+        gather_with_grad=args.gather_with_grad,
+        rank=args.rank,
+        world_size=args.world_size,
+        use_horovod=args.use_horovod,
+    )
+    global_embedding_batches = [gather(b) for b in embedding_batches]
     # flatten the device dimension
     global_embedding_batches = [
         b.reshape((-1, *b.shape[2:])).requires_grad_() for b in global_embedding_batches
@@ -205,10 +213,6 @@ def train_one_epoch(
                         {f'dist_{k}': v for k, v in dist_model_out.items()}
                     )
                 losses = loss(**model_out, output_dict=True)
-                #contrastive_loss = sum(losses.values())
-
-                #losses['contrastive_loss'] = contrastive_loss
-                #total_loss = contrastive_loss
 
                 if args.mtl:
                     emb_loss_fn = (
@@ -218,9 +222,13 @@ def train_one_epoch(
 
                     embeddings = (
                         [
-                            model.module.encode_text(embedding['input_ids'])
+                            model.module.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
                             if isinstance(model, nn.parallel.DistributedDataParallel)
-                            else model.encode_text(embedding['input_ids'])
+                            else model.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
                             for embedding in emb_batch
                         ]
                     )
@@ -234,7 +242,6 @@ def train_one_epoch(
                         embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
 
                     losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
-                    # total_loss += args.emb_loss_weight * embedding_loss
 
             total_loss = sum(losses.values())
             losses['loss'] = total_loss

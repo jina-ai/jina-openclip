@@ -17,6 +17,64 @@ except ImportError:
     hvd = None
 
 
+class GatherFeatures:
+
+    def __init__(
+        self,
+        local_loss: bool = False,
+        gather_with_grad: bool = False,
+        rank: int = 0,
+        world_size: int = 1,
+        use_horovod: int = False,
+    ):
+        self.local_loss = local_loss
+        self.gather_with_grad = gather_with_grad
+        self.rank = rank
+        self.world_size = world_size
+        self.use_horovod = use_horovod
+        assert has_distributed, (
+            'Package torch.distributed did not import correctly, please use a PyTorch '
+            'version with distributed support.'
+        )
+        if use_horovod:
+            assert hvd is not None, 'Please install horovod'
+
+    def __call__(self, features: torch.Tensor):
+        if self.use_horovod:
+            if self.gather_with_grad:
+                all_features = hvd.allgather(features)
+            else:
+                with torch.no_grad():
+                    all_features = hvd.allgather(features)
+                if not self.local_loss:
+                    # ensure grads for local rank when all_* features don't have
+                    # a gradient
+                    gathered_features = list(all_features.chunk(self.world_size, dim=0))
+                    gathered_features[self.rank] = features
+                    all_features = torch.cat(gathered_features, dim=0)
+        else:
+            # We gather tensors from all gpus
+            if self.gather_with_grad:
+                all_features = torch.cat(
+                    torch.distributed.nn.all_gather(features), dim=0
+                )
+            else:
+                gathered_features = [
+                    torch.zeros_like(features) for _ in range(self.world_size)
+                ]
+                dist.all_gather(gathered_features, features)
+
+                if not self.local_loss:
+                    # ensure grads for local rank when all_* features don't have
+                    # a gradient
+                    gathered_features[self.rank] = features
+
+                all_features = torch.cat(gathered_features, dim=0)
+
+        return all_features
+
+
+
 def gather_features(
     image_features,
     text_features,
@@ -27,88 +85,18 @@ def gather_features(
     world_size=1,
     use_horovod=False,
 ):
-    assert has_distributed, (
-        'torch.distributed did not import correctly, please use a PyTorch version '
-        'with support.'
+    gather = GatherFeatures(
+        local_loss=local_loss,
+        gather_with_grad=gather_with_grad,
+        rank=rank,
+        world_size=world_size,
+        use_horovod=use_horovod,
     )
-    if use_horovod:
-        assert hvd is not None, 'Please install horovod'
-        if gather_with_grad:
-            all_image_features = hvd.allgather(image_features)
-            all_text_features = hvd.allgather(text_features)
-            all_teacher_features = (
-                hvd.allgather(teacher_features) if teacher_features else None
-            )
-        else:
-            with torch.no_grad():
-                all_image_features = hvd.allgather(image_features)
-                all_text_features = hvd.allgather(text_features)
-                all_teacher_features = (
-                    hvd.allgather(teacher_features) if teacher_features else None
-                )
-            if not local_loss:
-                # ensure grads for local rank when all_* features don't have a gradient
-                gathered_image_features = list(
-                    all_image_features.chunk(world_size, dim=0)
-                )
-                gathered_text_features = list(
-                    all_text_features.chunk(world_size, dim=0)
-                )
-                gathered_image_features[rank] = image_features
-                gathered_text_features[rank] = text_features
-                all_image_features = torch.cat(gathered_image_features, dim=0)
-                all_text_features = torch.cat(gathered_text_features, dim=0)
-
-                if teacher_features:
-                    gathered_teacher_features = list(
-                        all_teacher_features.chunk(world_size, dim=0)
-                    )
-                    gathered_teacher_features[rank] = teacher_features
-                    all_teacher_features = torch.cat(gathered_teacher_features, dim=0)
-    else:
-        # We gather tensors from all gpus
-        if gather_with_grad:
-            all_image_features = torch.cat(
-                torch.distributed.nn.all_gather(image_features), dim=0
-            )
-            all_text_features = torch.cat(
-                torch.distributed.nn.all_gather(text_features), dim=0
-            )
-            all_teacher_features = (
-                torch.cat(torch.distributed.nn.all_gather(teacher_features), dim=0)
-                if teacher_features is not None
-                else None
-            )
-        else:
-            gathered_image_features = [
-                torch.zeros_like(image_features) for _ in range(world_size)
-            ]
-            gathered_text_features = [
-                torch.zeros_like(text_features) for _ in range(world_size)
-            ]
-
-            dist.all_gather(gathered_image_features, image_features)
-            dist.all_gather(gathered_text_features, text_features)
-
-            if not local_loss:
-                # ensure grads for local rank when all_* features don't have a gradient
-                gathered_image_features[rank] = image_features
-                gathered_text_features[rank] = text_features
-
-            all_image_features = torch.cat(gathered_image_features, dim=0)
-            all_text_features = torch.cat(gathered_text_features, dim=0)
-
-            all_teacher_features = None
-            if teacher_features is not None:
-                gathered_teacher_features = [
-                    torch.zeros_like(teacher_features) for _ in range(world_size)
-                ]
-                dist.all_gather(gathered_teacher_features, teacher_features)
-                if not local_loss:
-                    gathered_teacher_features[rank] = teacher_features
-                all_teacher_features = torch.cat(gathered_teacher_features, dim=0)
-
-    return all_image_features, all_text_features, all_teacher_features
+    return (
+        gather(image_features),
+        gather(text_features),
+        gather(teacher_features) if teacher_features else None
+    )
 
 
 class ClipLoss(nn.Module):
