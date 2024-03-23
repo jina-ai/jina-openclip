@@ -14,7 +14,7 @@ except ImportError:
 from open_clip import get_input_dtype
 from open_clip.loss import GatherFeatures
 
-from .distributed import all_gather_object, is_master
+from .distributed import is_master
 from .precision import get_autocast
 
 
@@ -173,6 +173,12 @@ def train_one_epoch(
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
+    gather = GatherFeatures(
+        local_loss=args.local_loss,
+        gather_with_grad=args.gather_with_grad,
+        rank=args.rank,
+        world_size=args.world_size,
+    )
 
     for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels))) in enumerate(zip(
         dataloader, islice(emb_dataloader, 1, None)
@@ -231,14 +237,13 @@ def train_one_epoch(
                             for embedding in emb_batch
                         ]
                     )
-                    if args.emb_global_batch:
-                        assert len(emb_labels) == 0
-                        grads, _ = get_global_batch_grads(
-                            embeddings, emb_loss_fn, args
-                        )
-                        embedding_loss = get_surrogate_loss(embeddings, grads)
+                    all_embeddings = [gather(emb) for emb in embeddings]
+                    if len(emb_labels) > 0:
+                        all_emb_labels = [gather(lab) for lab in emb_labels]
                     else:
-                        embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
+                        all_emb_labels = []
+
+                    embedding_loss = emb_loss_fn(*all_embeddings, *all_emb_labels)
 
                     losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
 
