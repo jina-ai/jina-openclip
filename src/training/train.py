@@ -90,7 +90,6 @@ def get_global_batch_grads(
         gather_with_grad=args.gather_with_grad,
         rank=args.rank,
         world_size=args.world_size,
-        use_horovod=args.use_horovod,
     )
     global_embedding_batches = [gather(b) for b in embedding_batches]
     # flatten the device dimension
