@@ -5,6 +5,7 @@ torchrun --nproc_per_node 8 -m training.main \
     --train-num-samples 15361000 \
     --val-data="pipe:aws s3 cp s3://laion-400m-data/data/{00000..00001}.tar -" \
     --val-num-samples 15000 \
+    --dataset-type webdataset \
     --batch-size 512 \
     --warmup 5000 \
     --epochs 120 \

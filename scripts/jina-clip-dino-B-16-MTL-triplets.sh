@@ -5,12 +5,13 @@ torchrun --nproc_per_node 8 -m training.main \
     --train-num-samples 15361000 \
     --val-data="pipe:aws s3 cp s3://laion-400m-data/data/{00000..00001}.tar -" \
     --val-num-samples 15000 \
+    --dataset-type webdataset \
     --batch-size 128 \
     --warmup 5000 \
     --epochs 120 \
     --lr 5e-5 \
     --precision amp \
-    --workers 9 \
+    --workers 8 \
     --model "jina-clip-ViT-B-16-dino" \
     --force-custom-text \
     --log-every-n-steps 20 \
