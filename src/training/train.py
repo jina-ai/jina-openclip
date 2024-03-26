@@ -173,12 +173,12 @@ def train_one_epoch(
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
-    gather = GatherFeatures(
-        local_loss=args.local_loss,
+    embeddings_gather = GatherFeatures(
+        local_loss=False,
         gather_with_grad=args.gather_with_grad,
         rank=args.rank,
         world_size=args.world_size,
-    )
+    ) if args.emb_global_batch else None
 
     for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels))) in enumerate(zip(
         dataloader, islice(emb_dataloader, 1, None)
@@ -224,26 +224,25 @@ def train_one_epoch(
                         emb_losses[emb_dataset]
                         if emb_dataset in emb_losses else emb_losses['*']
                     )
-
-                    embeddings = (
-                        [
-                            model.module.encode_text(
-                                embedding['input_ids'], normalize=True
-                            )
-                            if isinstance(model, nn.parallel.DistributedDataParallel)
-                            else model.encode_text(
-                                embedding['input_ids'], normalize=True
-                            )
-                            for embedding in emb_batch
-                        ]
-                    )
-                    all_embeddings = [gather(emb) for emb in embeddings]
-                    if len(emb_labels) > 0:
-                        all_emb_labels = [gather(lab) for lab in emb_labels]
+                    embeddings = [
+                        model.module.encode_text(
+                            embedding['input_ids'], normalize=True
+                        )
+                        if isinstance(model, nn.parallel.DistributedDataParallel)
+                        else model.encode_text(
+                            embedding['input_ids'], normalize=True
+                        )
+                        for embedding in emb_batch
+                    ]
+                    if args.emb_global_batch:
+                        assert len(emb_labels) == 0, (
+                            'Global batch cannot be used in conjunction with labeled '
+                            'data'
+                        )
+                        all_embeddings = [embeddings_gather(emb) for emb in embeddings]
+                        embedding_loss = emb_loss_fn(*all_embeddings)
                     else:
-                        all_emb_labels = []
-
-                    embedding_loss = emb_loss_fn(*all_embeddings, *all_emb_labels)
+                        embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
 
                     losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
 
