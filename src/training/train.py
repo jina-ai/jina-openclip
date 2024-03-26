@@ -12,8 +12,9 @@ except ImportError:
     wandb = None
 
 from open_clip import get_input_dtype
+from open_clip.loss import GatherFeatures
 
-from .distributed import all_gather_object, is_master
+from .distributed import is_master
 from .precision import get_autocast
 
 
@@ -84,7 +85,13 @@ def get_global_batch_grads(
         The `loss_fn` is differentiated w.r.t. the tensors in `embedding_batches`
         after computing the loss over embeddings gathered from all devices.
     """
-    global_embedding_batches = all_gather_object(args, embedding_batches)
+    gather = GatherFeatures(
+        local_loss=args.local_loss,
+        gather_with_grad=args.gather_with_grad,
+        rank=args.rank,
+        world_size=args.world_size,
+    )
+    global_embedding_batches = [gather(b) for b in embedding_batches]
     # flatten the device dimension
     global_embedding_batches = [
         b.reshape((-1, *b.shape[2:])).requires_grad_() for b in global_embedding_batches
@@ -166,6 +173,12 @@ def train_one_epoch(
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
+    embeddings_gather = GatherFeatures(
+        local_loss=False,
+        gather_with_grad=args.gather_with_grad,
+        rank=args.rank,
+        world_size=args.world_size,
+    ) if args.emb_global_batch else None
 
     for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels))) in enumerate(zip(
         dataloader, islice(emb_dataloader, 1, None)
@@ -205,36 +218,33 @@ def train_one_epoch(
                         {f'dist_{k}': v for k, v in dist_model_out.items()}
                     )
                 losses = loss(**model_out, output_dict=True)
-                #contrastive_loss = sum(losses.values())
-
-                #losses['contrastive_loss'] = contrastive_loss
-                #total_loss = contrastive_loss
 
                 if args.mtl:
                     emb_loss_fn = (
                         emb_losses[emb_dataset]
                         if emb_dataset in emb_losses else emb_losses['*']
                     )
-
-                    embeddings = (
-                        [
-                            model.module.encode_text(embedding['input_ids'])
-                            if isinstance(model, nn.parallel.DistributedDataParallel)
-                            else model.encode_text(embedding['input_ids'])
-                            for embedding in emb_batch
-                        ]
-                    )
-                    if args.emb_global_batch:
-                        assert len(emb_labels) == 0
-                        grads, _ = get_global_batch_grads(
-                            embeddings, emb_loss_fn, args
+                    embeddings = [
+                        model.module.encode_text(
+                            embedding['input_ids'], normalize=True
                         )
-                        embedding_loss = get_surrogate_loss(embeddings, grads)
+                        if isinstance(model, nn.parallel.DistributedDataParallel)
+                        else model.encode_text(
+                            embedding['input_ids'], normalize=True
+                        )
+                        for embedding in emb_batch
+                    ]
+                    if args.emb_global_batch:
+                        assert len(emb_labels) == 0, (
+                            'Global batch cannot be used in conjunction with labeled '
+                            'data'
+                        )
+                        all_embeddings = [embeddings_gather(emb) for emb in embeddings]
+                        embedding_loss = emb_loss_fn(*all_embeddings)
                     else:
                         embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
 
                     losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
-                    # total_loss += args.emb_loss_weight * embedding_loss
 
             total_loss = sum(losses.values())
             losses['loss'] = total_loss
