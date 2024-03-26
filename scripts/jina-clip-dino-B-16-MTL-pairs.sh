@@ -1,34 +1,34 @@
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
-torchrun --nproc_per_node 6 -m training.main \
+torchrun --nproc_per_node 8 -m training.main \
     --train-data="/home/admin/andreas/laion/train-part-2/{00000..14233}.tar::/home/admin/andreas/laion/train-part-3/{00000..05290}.tar::pipe:aws s3 cp s3://laion-400m-data/train/{00002..26002}.tar -" \
-    --train-num-samples 30722000 \
+    --train-num-samples 15361000 \
     --val-data="pipe:aws s3 cp s3://laion-400m-data/data/{00000..00001}.tar -" \
     --val-num-samples 15000 \
-    --dataset-type webdataset \
-    --batch-size 1024 \
+    --batch-size 512 \
     --warmup 5000 \
     --epochs 120 \
-    --lr 1e-5 \
+    --lr 5e-5 \
     --precision amp \
-    --workers 9 \
-    --model "jina-clip-ViT-B-16-dino" \
+    --workers 8 \
+    --model "jina-dino" \
     --force-custom-text \
     --log-every-n-steps 20 \
     --report-to "wandb" \
-    --name "jina-backbone-dino-ViT-B-16-locked-image-tower-long-run" \
+    --name "jina-backbone-dino-ViT-B-16-unlocked-image-tower-MTL-pairs-long-run" \
     --wandb-project-name "Jina-CLIP-long-running" \
     --clip-benchmark-frequency 1 \
     --mteb-frequency 1 \
     --mteb-tasks ArguAna,FiQA2018,NFCorpus,STS12,STS15,STS17 \
+    --evaluate-on-start \
     --mtl \
     --emb-datasets 'en/pairs/paq,en/pairs/reddit,en/pairs/stack_exchange_title_body,en/pairs/gooaq,en/pairs/wiki_answers,en/pairs/amazon_qa,en/pairs/s2orc,en/pairs/yahoo_answers,en/pairs/stack_exchange_title_answer,en/pairs/msmarco,en/pairs/eli5,en/pairs/code_search,en/pairs/coco_captions,en/pairs/fever,en/pairs/flickr_30k,en/pairs/stack_exchange_titlebody_answer,en/pairs/sentence_compression,en/pairs/specter,en/pairs/esci,en/pairs/snli,en/pairs/hotpotqa,en/pairs/multi_nli,en/pairs/banking77,en/pairs/altlex,en/pairs/squad2,en/pairs/simple_wikipedia,en/pairs/wikihow,en/pairs/fiqa,en/pairs/trivia_qa,en/pairs/search_qa,en/pairs/nfcorpus,en/pairs/scifact,en/pairs/cc_news_title_text,en/pairs/cc_news_title_description,en/pairs/cc_news_description_text,en/pairs/amazon_reviews,en/pairs/xmarket_en_all,en/pairs/tweet_qa,en/pairs/tmdb,en/pairs/stackoverflow' \
-    --emb-losses 'InfoNCELoss'\
-    --emb-datasets-s3-bucket 'embedding-datasets'\
-    --emb-sampling-rates '0.5,0.2,0.5,1,1,20,1,20,1,0,3,0,1,0.5,1,3,1,1,1,1,1,1,1,5,1,1,1,3,1,3,1,2,1,0,1,5,1,1'\
-    --emb-batch-size 512\
-    --emb-tokenizer-max-length 77\
-    --lock-image \
-    --lock-image-freeze-bn-stats \
+    --emb-losses 'InfoNCELoss' \
+    --emb-datasets-s3-bucket 'embedding-datasets' \
+    --emb-sampling-rates '0.5,0.2,0.5,1,1,20,1,20,1,0,3,0,1,0.5,1,3,1,1,1,1,1,1,1,5,1,1,1,3,1,3,1,2,1,0,1,5,1,1' \
+    --emb-batch-size 320 \
+    --emb-tokenizer-max-length 77 \
+    --emb-tokenizer-name "jinaai/jina-bert-b-en-v1-8k" \
+    --emb-global-batch \
     --grad-clip-norm 1.0 \
     --dataset-resampled \
