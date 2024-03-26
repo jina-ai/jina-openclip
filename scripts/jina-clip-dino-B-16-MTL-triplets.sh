@@ -11,7 +11,7 @@ torchrun --nproc_per_node 8 -m training.main \
     --lr 5e-5 \
     --precision amp \
     --workers 9 \
-    --model "jina-dino" \
+    --model "jina-clip-ViT-B-16-dino" \
     --force-custom-text \
     --log-every-n-steps 20 \
     --report-to "wandb" \
