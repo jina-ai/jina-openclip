@@ -28,7 +28,7 @@ torchrun --nproc_per_node 8 -m training.main \
     --emb-sampling-rates '1,1,1,1,1,1'\
     --emb-batch-size 128 \
     --emb-tokenizer-max-length 256 \
-    --emb-tokenizer-name "jinaai/jina-bert-b-en-v1-8k" \
+    --emb-tokenizer-name "jinaai/jina-embeddings-v2-base-en" \
     --grad-clip-norm 1.0 \
     --dataset-resampled \
     --pretrained '/home/admin/andreas/laion/projects-jina/openclip/scripts/logs/jina-backbone-dino-ViT-B-16-unlocked-image-tower-MTL-pair-long-run-resume-3/checkpoints/epoch-34/state.pt'

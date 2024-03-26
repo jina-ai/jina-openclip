@@ -28,7 +28,7 @@ torchrun --nproc_per_node 8 -m training.main \
     --emb-sampling-rates '0.5,0.2,0.5,1,1,20,1,20,1,0,3,0,1,0.5,1,3,1,1,1,1,1,1,1,5,1,1,1,3,1,3,1,2,1,0,1,5,1,1' \
     --emb-batch-size 320 \
     --emb-tokenizer-max-length 77 \
-    --emb-tokenizer-name "jinaai/jina-bert-b-en-v1-8k" \
+    --emb-tokenizer-name "jinaai/jina-embeddings-v2-base-en" \
     --emb-global-batch \
     --grad-clip-norm 1.0 \
     --dataset-resampled \

@@ -267,8 +267,8 @@ class CoSentLoss(nn.Module):
 class MultiCELoss(nn.Module):
     def __init__(
         self,
-        alpha: float = 0.2,
-        beta: float = 1.0,
+        alpha: float = 1.0,
+        beta: float = 0.0,
         temperature: float = 0.05,
         bidirectional: bool = False,
         single_info_nce: bool = False,

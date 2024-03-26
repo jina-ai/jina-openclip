@@ -165,7 +165,7 @@ def create_embeddings_dataloader(args):
             dynamic_collate,
             tokenizer=embeddings_tokenizer,
             tokenizer_options={
-                'padding': True,
+                'padding': 'max_length',
                 'truncation': True,
                 'max_length': args.emb_tokenizer_max_length,
                 'return_tensors': 'pt',
