@@ -3,6 +3,7 @@
 Wraps HuggingFace transformers (https://github.com/huggingface/transformers) models for use as a text tower in CLIP model.
 """
 import re
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -119,6 +120,7 @@ class HFTextEncoder(nn.Module):
         pretrained: bool = True,
         output_tokens: bool = False,
         trust_remote_code: bool = False,
+        revision: Optional[str] = None,
     ):
         super().__init__()
         self.output_tokens = output_tokens
@@ -152,6 +154,7 @@ class HFTextEncoder(nn.Module):
                     model_args,
                     trust_remote_code=trust_remote_code,
                     add_pooling_layer=uses_transformer_pooler,
+                    revision=revision
                 )
         else:
             self.config = config

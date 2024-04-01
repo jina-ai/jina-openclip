@@ -111,6 +111,7 @@ class CLIPTextCfg:
     hf_model_pretrained: bool = True
     hf_pooler_type: str = 'mean_pooler'  # attentional pooling for HF models
     hf_trust_remote_code: bool = False
+    hf_model_revision: Optional[str] = None
 
 
 def get_cast_dtype(precision: str):
@@ -350,6 +351,7 @@ def _build_text_tower(
             pretrained=text_cfg.hf_model_pretrained,
             output_tokens=text_cfg.output_tokens,
             trust_remote_code=text_cfg.hf_trust_remote_code,
+            revision=text_cfg.hf_model_revision,
         )
     else:
         act_layer = QuickGELU if quick_gelu else nn.GELU
