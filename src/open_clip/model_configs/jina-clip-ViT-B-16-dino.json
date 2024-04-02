@@ -14,6 +14,7 @@
         "hf_tokenizer_name": "jinaai/jina-bert-b-en-v1-8k",
         "hf_pooler_type": "mean_pooler",
         "hf_trust_remote_code": true,
+        "hf_model_revision": "feat-efficient-alibi-construction",
         "proj_type": null
     }
 }
