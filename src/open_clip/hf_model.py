@@ -154,7 +154,7 @@ class HFTextEncoder(nn.Module):
                     model_args,
                     trust_remote_code=trust_remote_code,
                     add_pooling_layer=uses_transformer_pooler,
-                    revision=revision
+                    code_revision=revision
                 )
         else:
             self.config = config
