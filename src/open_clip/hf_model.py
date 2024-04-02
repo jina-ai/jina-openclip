@@ -135,7 +135,9 @@ class HFTextEncoder(nn.Module):
             )
         if config is None:
             self.config = AutoConfig.from_pretrained(
-                model_name_or_path, trust_remote_code=trust_remote_code
+                model_name_or_path,
+                trust_remote_code=trust_remote_code,
+                code_revision=revision,
             )
             create_func, model_args = (
                 (AutoModel.from_pretrained, model_name_or_path)
