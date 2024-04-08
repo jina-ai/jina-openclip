@@ -179,7 +179,9 @@ class HFTextEncoder(nn.Module):
                 nn.GELU(),
                 nn.Linear(hidden_size, output_dim, bias=False),
             )
-
+        else:
+            self.proj = nn.Identity()
+            
     def forward(self, x: TensorType):
         attn_mask = (x != self.config.pad_token_id).long()
         out = self.transformer(input_ids=x, attention_mask=attn_mask)

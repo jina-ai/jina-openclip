@@ -352,7 +352,7 @@ class ResampledShards2(IterableDataset):
 
 
 def get_wds_dataset(
-    args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None
+    args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None, teacher_tokenizer = None
 ):
     input_shards = args.train_data if is_train else args.val_data
     assert input_shards is not None
@@ -429,9 +429,9 @@ def get_wds_dataset(
         [
             wds.select(filter_no_caption_or_no_image),
             wds.decode('pilrgb', handler=log_and_continue),
-            wds.rename(image='jpg;png;jpeg;webp', text='txt'),
-            wds.map_dict(image=preprocess_img, text=lambda text: tokenizer(text)[0]),
-            wds.to_tuple('image', 'text'),
+            wds.rename(image='jpg;png;jpeg;webp', text='txt', teacher='txt'),
+            wds.map_dict(image=preprocess_img, text=lambda text: tokenizer(text)[0], teacher=lambda teacher: teacher_tokenizer(teacher)[0]),
+            wds.to_tuple('image', 'text', 'teacher'),
             wds.batched(args.batch_size, partial=not is_train),
         ]
     )
@@ -594,13 +594,13 @@ def get_dataset_fn(data_path, dataset_type):
         raise ValueError(f'Unsupported dataset type: {dataset_type}')
 
 
-def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
+def get_data(args, preprocess_fns, epoch=0, tokenizer=None, teacher_tokenizer = None):
     preprocess_train, preprocess_val = preprocess_fns
     data = {}
 
     if args.train_data or args.dataset_type == 'synthetic':
         data['train'] = get_dataset_fn(args.train_data, args.dataset_type)(
-            args, preprocess_train, is_train=True, epoch=epoch, tokenizer=tokenizer
+            args, preprocess_train, is_train=True, epoch=epoch, tokenizer=tokenizer, teacher_tokenizer=teacher_tokenizer
         )
 
     if args.val_data:

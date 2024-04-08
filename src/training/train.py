@@ -70,6 +70,8 @@ def train_one_epoch(
     scheduler,
     dist_model,
     args,
+    tokenizer,
+    teacher_tokenizer,
     tb_writer=None,
 ):
     device = torch.device(args.device)
@@ -100,16 +102,18 @@ def train_one_epoch(
         if not args.skip_scheduler:
             scheduler(step)
 
-        images, texts = batch
+        images, texts, teacher_inp = batch
+
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
+        teacher_inp = teacher_inp.to(device=device, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
 
         if args.accum_freq == 1:
             with autocast():
-                model_out = model(images, texts)
+                model_out = model(images, texts, teacher_inp)
                 logit_scale = model_out['logit_scale']
                 if args.distill:
                     with torch.no_grad():

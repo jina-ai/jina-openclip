@@ -401,11 +401,13 @@ def main(args):
 
     # initialize datasets
     tokenizer = get_tokenizer(args.model)
+    teacher_tokenizer = get_tokenizer('jina-clip-ViT-B-32')
     data = get_data(
         args,
         (preprocess_train, preprocess_val),
         epoch=start_epoch,
         tokenizer=tokenizer,
+        teacher_tokenizer = teacher_tokenizer
     )
     assert len(data), 'At least one train or eval dataset must be specified.'
 
@@ -463,6 +465,13 @@ def main(args):
     # Pytorch 2.0 adds '_orig_mod.' prefix to keys of state_dict() of compiled models.
     # For compatibility, we save state_dict() of the original model, which shares the
     # weights without the prefix.
+    pretrained_model,_,_ = create_model_and_transforms('ViT-B-32', pretrained='laion400m_e32')
+    for name, param in pretrained_model.state_dict().items():
+    # Check if the parameter exists in your model's state dictionary
+        if name in model.state_dict().keys():
+            # Replace the parameter in your model's state dictionary
+            model.state_dict()[name].copy_(param)
+
     original_model = model
     if args.torchcompile:
         logging.info('Compiling model...')
@@ -498,6 +507,11 @@ def main(args):
         )
 
     loss = create_loss(args)
+    for name, param in model.named_parameters():
+        if not name.startswith('projection_head'):
+            param.requires_grad = False
+
+    model
 
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):
@@ -513,7 +527,9 @@ def main(args):
             scheduler,
             dist_model,
             args,
-            tb_writer=writer,
+            tokenizer,
+            teacher_tokenizer,
+            tb_writer=writer
         )
         completed_epoch = epoch + 1
 
@@ -559,7 +575,7 @@ def main(args):
             evaluate(
                 model,
                 preprocess_val,
-                tokenizer,
+                teacher_tokenizer,
                 data,
                 completed_epoch,
                 args,

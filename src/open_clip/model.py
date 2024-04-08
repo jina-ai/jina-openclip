@@ -199,10 +199,10 @@ def load_checkpoint(
     # Certain text transformers no longer expect position_ids after transformers==4.31
 
     # remove logit biases and scale for 3-towers
-    if 'logit_bias' in state_dict:
-        del state_dict['logit_bias']
-    if 'logit_scale' in state_dict:
-        del state_dict['logit_scale']
+    #if 'logit_bias' in state_dict:
+    #    del state_dict['logit_bias']
+    #if 'logit_scale' in state_dict:
+    #    del state_dict['logit_scale']
 
     position_id_key = 'text.transformer.embeddings.position_ids'
     if position_id_key in state_dict and not hasattr(model, position_id_key):
@@ -397,7 +397,7 @@ def _build_text_tower(
 
                 logging.info(f'Loading pretrained model from {_ckpt_path} ...')
                 load_checkpoint(
-                    text, _ckpt_path, strict=False, root='text', exclude=exclude
+                    text, _ckpt_path, strict=False, root='transformer', exclude=exclude
                 )
             else:
                 _error_str = (

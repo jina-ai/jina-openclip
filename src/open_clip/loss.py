@@ -187,6 +187,51 @@ class ClipLoss(nn.Module):
         return {'contrastive_loss': total_loss} if output_dict else total_loss
 
 
+class ThreeTowersProjection(ClipLoss):
+    def __init__(
+        self,
+        mse_text_towers_loss_weight,
+        clip_similarity_value_loss_weight,
+        pad_id=0,  # pad_token for open_clip custom tokenizer
+        local_loss=False,
+        gather_with_grad=False,
+        cache_labels=False,
+        rank=0,
+        world_size=1,
+        use_horovod=False,
+    ):
+        super().__init__()
+
+        self.mse_loss = nn.MSELoss()
+        self.sim_loss_weight = clip_similarity_value_loss_weight
+        self.mse_text_towers_loss_weight = mse_text_towers_loss_weight
+        self.cosine_loss = nn.CosineSimilarity(dim=1, eps=1e-6)
+
+    def forward(
+        self,
+        image_features,
+        text_features,
+        projected_image_features,
+        projected_text_features,
+        teacher_features,
+        logit_scale,
+        output_dict=False,
+    ):
+
+        if self.sim_loss_weight:
+            sim_loss1 = self.cosine_loss(text_features, image_features)
+            sim_loss2 = self.cosine_loss(teacher_features, projected_image_features)
+            sim_loss = self.mse_loss(sim_loss1, sim_loss2) * self.sim_loss_weight
+
+
+        text_loss = self.mse_loss(projected_text_features, teacher_features)
+        text_loss = text_loss * self.mse_text_towers_loss_weight
+
+        if output_dict:
+            return {'sim_loss': sim_loss, 'mse_text_loss': text_loss}
+
+        return sim_loss, text_loss
+
 class ThreeTowersCosEmbeddingLoss(ClipLoss):
     def __init__(
         self,

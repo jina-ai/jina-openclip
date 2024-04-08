@@ -485,6 +485,18 @@ def parse_args(args):
         help='Weight assigned to contrastive loss when training CoCa.',
     )
     parser.add_argument(
+        '--clip-similarity-loss-weight',
+        type=float,
+        default=2.0,
+        help='Weight assigned to caption loss in CoCa.',
+    )
+    parser.add_argument(
+        '--mse-loss-weight',
+        type=float,
+        default=1.0,
+        help='Weight assigned to contrastive loss when training CoCa.',
+    )
+    parser.add_argument(
         '--3towers-cos-embeddings-loss-weight',
         type=float,
         default=2.0,
@@ -545,7 +557,7 @@ def parse_args(args):
     parser.add_argument(
         '--clip-benchmark-datasets',
         type=str,
-        default='wds/mscoco_captions,wds/flickr8k,wds/flickr30k,wds/imagenetv2',
+        default='wds/mscoco_captions,wds/flickr8k,wds/flickr30k',
         help='Specify datasets for CLIP benchmark.',
     )
     parser.add_argument(

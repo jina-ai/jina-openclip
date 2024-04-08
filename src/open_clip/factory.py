@@ -17,6 +17,7 @@ from .loss import (
     SigLipLoss,
     ThreeTowerLoss,
     ThreeTowersCosEmbeddingLoss,
+    ThreeTowersProjection,
 )
 from .model import (
     CLIP,
@@ -365,10 +366,10 @@ def create_loss(args):
             world_size=args.world_size,
             use_horovod=args.horovod,
         )
-    elif '3towers-text' in args.model.lower():
-        return ThreeTowersCosEmbeddingLoss(
-            mse_loss_weight=args.coca_caption_loss_weight,
-            clip_loss_weight=args.coca_contrastive_loss_weight,
+    elif '3tower-text' in args.model.lower():
+        return ThreeTowersProjection(
+            mse_text_towers_loss_weight=args.mse_loss_weight,
+            clip_similarity_value_loss_weight=args.clip_similarity_loss_weight,
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
             cache_labels=True,

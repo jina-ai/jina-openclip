@@ -2,7 +2,7 @@ from contextlib import suppress
 from typing import Any, Optional, Union
 
 import torch
-import torch.nn.functional as f
+import torch.nn.functional as F
 import torch.utils.data
 from tqdm import tqdm
 
@@ -104,15 +104,17 @@ def evaluate(
 
         # compute the embedding of images and texts
         with torch.no_grad(), autocast():
-            batch_images_emb = f.normalize(model.encode_image(batch_images), dim=-1)
-            batch_texts_emb = f.normalize(model.encode_text(batch_texts_tok), dim=-1)
+            output = model(image = batch_images, teacher_inp= batch_texts_tok)
+            #batch_images_emb = F.normalize(projected_image_features, dim=-1).cpu()
+            #batch_texts_emb = F.normalize(teacher_features, dim=-1).cpu()
+            #batch_images_emb = F.normalize(model.encode_image(batch_images), dim=-1)
+            #batch_texts_emb = F.normalize(model.encode_teacher(batch_texts_tok), dim=-1)
 
-        batch_images_emb_list.append(batch_images_emb.cpu())
-        batch_texts_emb_list.append(batch_texts_emb.cpu())
+        batch_images_emb_list.append(output['projected_image_features'])
+        batch_texts_emb_list.append(output['teacher_features'])
         texts_image_index.extend(batch_texts_image_index)
 
     batch_size = len(batch_images_emb_list[0])
-
     # concatenate all embeddings
     images_emb = torch.cat(batch_images_emb_list)
     texts_emb = torch.cat(batch_texts_emb_list)
