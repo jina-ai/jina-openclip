@@ -56,9 +56,11 @@ def unwrap_model(model):
         return model
 
 
-def backward(total_loss, scaler):
+def backward(total_loss, model, scaler=None, deepspeed=False):
     if scaler is not None:
         scaler.scale(total_loss).backward()
+    elif deepspeed:
+        model.backward(total_loss)
     else:
         total_loss.backward()
 
@@ -201,7 +203,11 @@ def train_one_epoch(
 
         data_time_m.update(time.time() - end)
 
-        optimizer.zero_grad()
+        if args.deepspeed:
+            model.zero_grad()
+            model.micro_steps = 0
+        else:
+            optimizer.zero_grad()
 
         if args.accum_freq == 1:
 
@@ -248,7 +254,7 @@ def train_one_epoch(
 
             total_loss = sum(losses.values())
             losses['loss'] = total_loss
-            backward(total_loss, scaler)
+            backward(total_loss, model, scaler=scaler, deepspeed=args.deepspeed)
 
         else:
 
@@ -292,7 +298,11 @@ def train_one_epoch(
             # Re-do the forward pass for those batches, and use the cached features
             # from the other batches as negatives.
             # Call backwards each time, but only step optimizer at the end.
-            optimizer.zero_grad()
+            if args.deepspeed:
+                model.zero_grad()
+                model.micro_steps = 0
+            else:
+                optimizer.zero_grad()
 
             for k in range(args.accum_freq):
                 images = accum_images[k]
@@ -349,7 +359,7 @@ def train_one_epoch(
                         losses['embedding_loss'] = embedding_loss
                         total_loss += args.emb_loss_weight * embedding_loss
 
-                backward(total_loss, scaler)
+                backward(total_loss, model, scaler=scaler, deepspeed=args.deepspeed)
 
         if scaler is not None:
             if args.horovod:
@@ -369,6 +379,8 @@ def train_one_epoch(
                     )
                 scaler.step(optimizer)
             scaler.update()
+        elif args.deepspeed:
+            model.step()
         else:
             if args.grad_clip_norm is not None:
                 torch.nn.utils.clip_grad_norm_(

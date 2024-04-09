@@ -1,17 +1,7 @@
 from torch import nn, optim
 
 
-def create_optimizer(
-    model: nn.Module,
-    base_lr: float,
-    base_text_lr: float,
-    weight_decay: float,
-    beta1: float,
-    beta2: float,
-    eps: float,
-    text_lr_decay: float = 1.0,
-    vision_lr_decay: float = 1.0,
-):
+def create_optimizer(args, model: nn.Module, dsinit=None):
     is_gain_or_bias = (
         lambda n, p: p.ndim < 2
         or 'bn' in n
@@ -35,26 +25,26 @@ def create_optimizer(
         )
 
     params = []
-    _text_lr = base_text_lr if base_text_lr is not None else base_lr
+    _text_lr = args.base_text_lr if args.base_text_lr is not None else args.base_lr
     _text_counter = 0
-    _vision_lr = base_lr
+    _vision_lr = args.base_lr
     _vision_counter = 0
 
     for name, param in reversed(list(model.named_parameters())):
         if param.requires_grad:
-            _weight_decay = 0.0 if is_gain_or_bias(name, param) else weight_decay
+            _weight_decay = 0.0 if is_gain_or_bias(name, param) else args.wd
 
-            lr = base_lr
+            lr = args.base_lr
             descriptor = ''
             if is_text_module(name):
                 lr = _text_lr
                 descriptor = f'type=text|depth={_text_counter}|name={name}|'
-                _text_lr *= text_lr_decay
+                _text_lr *= args.text_lr_decay
                 _text_counter += 1
             elif is_vision_module(name):
                 lr = _vision_lr
                 descriptor = f'type=vision|depth={_vision_counter}|name={name}|'
-                _vision_lr *= vision_lr_decay
+                _vision_lr *= args.vision_lr_decay
                 _vision_counter += 1
 
             params.append(
@@ -66,4 +56,34 @@ def create_optimizer(
                 }
             )
 
-    return optim.AdamW(params, betas=(beta1, beta2), eps=eps)
+    if args.deepspeed:
+        assert dsinit is not None
+        scaler = None
+        model, optimizer, _, _ = dsinit(
+            args=args,
+            model=model,
+            model_parameters=params,
+            dist_init_required=not args.distributed,
+        )
+    else:
+        optimizer = optim.AdamW(params, betas=(args.beta1, args.beta2), eps=args.eps)
+
+        if args.horovod:
+            try:
+                import horovod.torch as hvd
+            except ImportError:
+                raise ImportError('Horovod is not installed')
+
+            optimizer = hvd.DistributedOptimizer(
+                optimizer, named_parameters=model.named_parameters()
+            )
+            hvd.broadcast_parameters(model.state_dict(), root_rank=0)
+            hvd.broadcast_optimizer_state(optimizer, root_rank=0)
+
+        if args.precision == 'amp':
+            from torch.cuda.amp import GradScaler
+            scaler = GradScaler()
+        else:
+            scaler = None
+
+    return model, optimizer, scaler

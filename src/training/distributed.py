@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import timedelta
 
@@ -24,7 +25,8 @@ def is_master(args, local=False):
 
 def is_using_horovod():
     # NOTE w/ horovod run, OMPI vars should be set, but w/ SLURM PMI vars will be set
-    # Differentiating between horovod and DDP use via SLURM may not be possible, so horovod arg still required...
+    # Differentiating between horovod and DDP use via SLURM may not be possible, so 
+    # horovod arg still required...
     ompi_vars = ['OMPI_COMM_WORLD_RANK', 'OMPI_COMM_WORLD_SIZE']
     pmi_vars = ['PMI_RANK', 'PMI_SIZE']
     if all([var in os.environ for var in ompi_vars]) or all(
@@ -146,3 +148,71 @@ def all_gather_object(args, obj, dst=0):
         objects = [None for _ in range(args.world_size)]
         dist.all_gather_object(objects, obj)
         return objects
+
+
+def create_deepspeed_config(args):
+    args.deepspeed_config = os.path.join(os.getcwd(), 'deepspeed.json')
+    _, _, world_size = world_info_from_env()
+
+    with open(args.deepspeed_config, 'w') as f:
+        dsconfig = {
+            'train_batch_size': args.batch_size * world_size,
+            'train_micro_batch_size_per_gpu': args.batch_size,
+            'steps_per_print': 1000,
+            'optimizer': {
+                'type': 'Adam',
+                'adam_w_mode': True,
+                'params': {
+                    'bias_correction': True,
+                    'betas': [
+                        args.beta1,
+                        args.beta2
+                    ],
+                    'eps': args.eps
+                }
+            },
+            'fp16': {
+                'enabled': True,
+                'loss_scale': 0,
+                'initial_scale_power': 16,
+                'loss_scale_window': 1000,
+                'hysteresis': 2,
+                'min_loss_scale': 1
+            },
+            # 'bf16': {
+            #     'enabled': True
+            # },
+            'amp': {
+                'enabled': False,
+                'opt_level': 'O2'
+            },
+            'flops_profiler': {
+                'enabled': True,
+                'profile_step': -1,
+                'module_depth': -1,
+                'top_modules': 1,
+                'detailed': True,
+            },
+        }
+
+        if args.grad_clip_norm is not None:
+            dsconfig.update({'gradient_clipping': args.grad_clip_norm})
+
+        if args.zero_stage == 1:
+            dsconfig.update(
+                {
+                    'zero_optimization': {
+                        'stage': 1, 
+                        'reduce_bucket_size': 5e8,
+                        # 'offload_optimizer': {
+                        #     'device': 'cpu'
+                        # }
+                    }
+                }
+            )
+        elif args.zero_stage > 1:
+            raise NotImplementedError()
+
+        f.write(json.dumps(dsconfig, indent=2))
+
+        return dsconfig

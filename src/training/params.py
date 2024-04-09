@@ -1,5 +1,6 @@
 import argparse
 import ast
+import os
 
 
 def get_default_params(model_name):
@@ -434,6 +435,18 @@ def parse_args(args):
         help='Use horovod for distributed training.',
     )
     parser.add_argument(
+        '--deepspeed',
+        action='store_true',
+        default=False,
+        help='Use deepspeed for distributed training.'
+    )
+    parser.add_argument(
+        '--zero-stage',
+        type=int,
+        default=1,
+        help='Stage of ZeRO algorith, applicable if deepspeed is enabled.'
+    )
+    parser.add_argument(
         '--ddp-static-graph',
         default=False,
         action='store_true',
@@ -664,9 +677,22 @@ def parse_args(args):
     args = parser.parse_args(args)
 
     # If some params are not passed, we use the default values based on model name.
-    default_params = get_default_params(args.model)
-    for name, val in default_params.items():
+    defaultparams = get_default_params(args.model)
+    for name, val in defaultparams.items():
         if getattr(args, name) is None:
             setattr(args, name, val)
 
-    return args
+    if args.deepspeed:
+        try:
+            import deepspeed
+            os.environ['ENV_TYPE'] = 'deepspeed'
+            _ = deepspeed.add_config_arguments(parser)
+            dsinit = deepspeed.initialize
+        except:
+            print('DeepSpeed is not available, please run \'pip install deepspeed\'')
+            exit(0)
+    else:
+        os.environ['ENV_TYPE'] = 'pytorch'
+        dsinit = None
+
+    return args, dsinit
