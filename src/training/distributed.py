@@ -92,24 +92,39 @@ def init_distributed_device(args):
         args.deepspeed_config = os.path.join(os.getcwd(), 'deepspeed.json')
         args.distributed = True
 
+        if args.optimizer == 'lamb':
+            optimizer = {
+                'type': 'Lamb',
+                'params': {
+                    'bias_correction': True,
+                    'betas': [
+                        args.beta1,
+                        args.beta2
+                    ],
+                    'eps': args.eps
+                }
+            }
+        else:
+            optimizer = {
+                'type': 'Adam',
+                'adam_w_mode': True,
+                'params': {
+                    'bias_correction': True,
+                    'betas': [
+                        args.beta1,
+                        args.beta2
+                    ],
+                    'eps': args.eps
+                }
+            }
+
         with open(args.deepspeed_config, 'w') as f:
             dsconfig = {
                 'train_batch_size': args.batch_size *args. world_size,
                 'train_micro_batch_size_per_gpu': args.batch_size,
                 'gradient_accumulation_steps': args.accum_freq,
                 'steps_per_print': args.log_every_n_steps,
-                'optimizer': {
-                    'type': 'Adam',
-                    'adam_w_mode': True,
-                    'params': {
-                        'bias_correction': True,
-                        'betas': [
-                            args.beta1,
-                            args.beta2
-                        ],
-                        'eps': args.eps
-                    }
-                },
+                'optimizer': optimizer,
                 'fp16': {
                     'enabled': args.precision == 'fp16' or args.precision == 'float16',
                     'loss_scale': 0,

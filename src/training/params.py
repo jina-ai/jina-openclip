@@ -177,6 +177,15 @@ def parse_args(args):
         help='Use this flag to skip the learning rate decay.',
     )
     parser.add_argument(
+        '--optimizer',
+        type=str,
+        default='adamw',
+        help=(
+            'Optimizer type, one of \'adamw\' or \'lamb\', '
+            '\'lamb\' is only available when using DeepSpeed'
+        ),
+    )
+    parser.add_argument(
         '--lr-scheduler',
         type=str,
         default='cosine',

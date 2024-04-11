@@ -1,3 +1,5 @@
+import warnings
+
 from torch import nn, optim
 
 
@@ -66,6 +68,9 @@ def create_optimizer(args, model: nn.Module, dsinit=None):
             dist_init_required=True,
         )
     else:
+        if args.optimizer == 'lamb':
+            warnings.warn('LAMB optimizer is only supported when using DeepSpeed')
+
         optimizer = optim.AdamW(params, betas=(args.beta1, args.beta2), eps=args.eps)
 
         if args.horovod:
