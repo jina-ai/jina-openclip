@@ -10,7 +10,6 @@ if os.getenv('ENV_TYPE') == 'deepspeed':
     from deepspeed.runtime.activation_checkpointing.checkpointing import checkpoint
 else:
     from torch.utils.checkpoint import checkpoint
-from torch.utils.checkpoint import checkpoint
 
 from .pos_embed import get_2d_sincos_pos_embed
 from .utils import to_2tuple

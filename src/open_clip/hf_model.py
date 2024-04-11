@@ -2,12 +2,17 @@
 
 Wraps HuggingFace transformers (https://github.com/huggingface/transformers) models for use as a text tower in CLIP model.
 """
+import os
 import re
 from typing import Optional
 
 import torch
 import torch.nn as nn
 from torch import TensorType
+if os.getenv('ENV_TYPE') == 'deepspeed':
+    from deepspeed.runtime.activation_checkpointing.checkpointing import checkpoint
+else:
+    from torch.utils.checkpoint import checkpoint
 
 try:
     import transformers
@@ -235,7 +240,9 @@ class HFTextEncoder(nn.Module):
 
     @torch.jit.ignore
     def set_grad_checkpointing(self, enable=True):
-        self.transformer.gradient_checkpointing_enable()
+        self.transformer._set_gradient_checkpointing(
+            enable=True, gradient_checkpointing_func=checkpoint
+        )
 
     def init_parameters(self):
         pass
