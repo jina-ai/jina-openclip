@@ -87,6 +87,78 @@ def init_distributed_device(args):
         os.environ['LOCAL_RANK'] = str(args.local_rank)
         os.environ['RANK'] = str(args.rank)
         os.environ['WORLD_SIZE'] = str(args.world_size)
+    elif args.deepspeed:
+        args.local_rank, args.rank, args.world_size = world_info_from_env()
+        args.deepspeed_config = os.path.join(os.getcwd(), 'deepspeed.json')
+        args.distributed = True
+
+        with open(args.deepspeed_config, 'w') as f:
+            dsconfig = {
+                'train_batch_size': args.batch_size *args. world_size,
+                'train_micro_batch_size_per_gpu': args.batch_size,
+                'gradient_accumulation_steps': args.accum_freq,
+                'steps_per_print': args.log_every_n_steps,
+                'optimizer': {
+                    'type': 'Adam',
+                    'adam_w_mode': True,
+                    'params': {
+                        'bias_correction': True,
+                        'betas': [
+                            args.beta1,
+                            args.beta2
+                        ],
+                        'eps': args.eps
+                    }
+                },
+                'fp16': {
+                    'enabled': args.precision == 'fp16' or args.precision == 'float16',
+                    'loss_scale': 0,
+                    'initial_scale_power': 16,
+                    'loss_scale_window': 1000,
+                    'hysteresis': 2,
+                    'min_loss_scale': 1
+                },
+                'bf16': {
+                    'enabled': args.precision == 'bf16' or args.precision == 'bfloat16',
+                },
+                'amp': {
+                    'enabled': args.precision == 'amp',
+                    'opt_level': 'O2'
+                },
+                # 'flops_profiler': {
+                #     'enabled': True,
+                #     'profile_step': -1,
+                #     'module_depth': -1,
+                #     'top_modules': 1,
+                #     'detailed': True,
+                # },
+                'comms_logger': {
+                    'enabled': True,
+                    'verbose': False,
+                    'prof_all': True,
+                    'debug': False
+                }
+            }
+
+            if args.grad_clip_norm is not None:
+                dsconfig.update({'gradient_clipping': args.grad_clip_norm})
+
+            if args.zero_stage == 1:
+                dsconfig.update(
+                    {
+                        'zero_optimization': {
+                            'stage': 1,
+                            'reduce_bucket_size': 5e8,
+                            # 'offload_optimizer': {
+                            #     'device': 'cpu'
+                            # }
+                        }
+                    }
+                )
+            elif args.zero_stage > 1:
+                raise NotImplementedError()
+
+            f.write(json.dumps(dsconfig, indent=2))
     elif is_using_distributed():
         if 'SLURM_PROCID' in os.environ:
             # DDP via SLURM
@@ -148,72 +220,3 @@ def all_gather_object(args, obj, dst=0):
         objects = [None for _ in range(args.world_size)]
         dist.all_gather_object(objects, obj)
         return objects
-
-
-def create_deepspeed_config(args):
-    args.deepspeed_config = os.path.join(os.getcwd(), 'deepspeed.json')
-    _, _, world_size = world_info_from_env()
-
-    with open(args.deepspeed_config, 'w') as f:
-        dsconfig = {
-            'train_batch_size': args.batch_size * world_size,
-            'train_micro_batch_size_per_gpu': args.batch_size,
-            'gradient_accumulation_steps': args.accum_freq,
-            'steps_per_print': 1000,
-            'optimizer': {
-                'type': 'Adam',
-                'adam_w_mode': True,
-                'params': {
-                    'bias_correction': True,
-                    'betas': [
-                        args.beta1,
-                        args.beta2
-                    ],
-                    'eps': args.eps
-                }
-            },
-            'fp16': {
-                'enabled': True,
-                'loss_scale': 0,
-                'initial_scale_power': 16,
-                'loss_scale_window': 1000,
-                'hysteresis': 2,
-                'min_loss_scale': 1
-            },
-            # 'bf16': {
-            #     'enabled': True
-            # },
-            'amp': {
-                'enabled': False,
-                'opt_level': 'O2'
-            },
-            'flops_profiler': {
-                'enabled': True,
-                'profile_step': -1,
-                'module_depth': -1,
-                'top_modules': 1,
-                'detailed': True,
-            },
-        }
-
-        if args.grad_clip_norm is not None:
-            dsconfig.update({'gradient_clipping': args.grad_clip_norm})
-
-        if args.zero_stage == 1:
-            dsconfig.update(
-                {
-                    'zero_optimization': {
-                        'stage': 1, 
-                        'reduce_bucket_size': 5e8,
-                        # 'offload_optimizer': {
-                        #     'device': 'cpu'
-                        # }
-                    }
-                }
-            )
-        elif args.zero_stage > 1:
-            raise NotImplementedError()
-
-        f.write(json.dumps(dsconfig, indent=2))
-
-        return dsconfig

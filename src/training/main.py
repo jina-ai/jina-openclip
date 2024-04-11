@@ -33,10 +33,8 @@ from open_clip import (
 )
 
 from training.data import MultiS3EmbeddingDataset, dynamic_collate, get_multimodal_data
-from training.distributed import (
-    broadcast_object, init_distributed_device, is_master, create_deepspeed_config,
-)
-from training.evaluate import evaluate
+from training.distributed import broadcast_object, init_distributed_device, is_master
+from training.eval import evaluate
 from training.fileutils import pt_load, remote_sync, start_sync_process
 from training.logger import setup_logging
 from training.optimizer import create_optimizer
@@ -188,10 +186,6 @@ def main(args):
 
     # fully initialize distributed device environment
     device = init_distributed_device(args)
-
-    # create deepspeed config
-    if dsinit is not None:
-        create_deepspeed_config(args)
 
     # get the name of the experiments
     if args.name is None:

@@ -673,6 +673,7 @@ def parse_args(args):
         default=1.0,
         help='The weighing factor for the embedding loss.',
     )
+    parser.add_argument('--local_rank', type=int, default=0)
 
     args = parser.parse_args(args)
 
@@ -686,9 +687,8 @@ def parse_args(args):
         try:
             import deepspeed
             os.environ['ENV_TYPE'] = 'deepspeed'
-            _ = deepspeed.add_config_arguments(parser)
             dsinit = deepspeed.initialize
-        except:
+        except ImportError or ModuleNotFoundError:
             print('DeepSpeed is not available, please run \'pip install deepspeed\'')
             exit(0)
     else:

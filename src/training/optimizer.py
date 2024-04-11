@@ -25,16 +25,16 @@ def create_optimizer(args, model: nn.Module, dsinit=None):
         )
 
     params = []
-    _text_lr = args.base_text_lr if args.base_text_lr is not None else args.base_lr
+    _text_lr = args.text_lr if args.text_lr is not None else args.lr
     _text_counter = 0
-    _vision_lr = args.base_lr
+    _vision_lr = args.lr
     _vision_counter = 0
 
     for name, param in reversed(list(model.named_parameters())):
         if param.requires_grad:
             _weight_decay = 0.0 if is_gain_or_bias(name, param) else args.wd
 
-            lr = args.base_lr
+            lr = args.lr
             descriptor = ''
             if is_text_module(name):
                 lr = _text_lr
@@ -63,7 +63,7 @@ def create_optimizer(args, model: nn.Module, dsinit=None):
             args=args,
             model=model,
             model_parameters=params,
-            dist_init_required=not args.distributed,
+            dist_init_required=True,
         )
     else:
         optimizer = optim.AdamW(params, betas=(args.beta1, args.beta2), eps=args.eps)
