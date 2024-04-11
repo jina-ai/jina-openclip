@@ -456,6 +456,12 @@ def parse_args(args):
         help='Stage of ZeRO algorith, applicable if deepspeed is enabled.'
     )
     parser.add_argument(
+        '--zero-bucket-size',
+        type=int,
+        default=1e6,
+        help='ZeRO algorith allgather and reduce bucket size.'
+    )
+    parser.add_argument(
         '--ddp-static-graph',
         default=False,
         action='store_true',
