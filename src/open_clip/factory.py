@@ -222,10 +222,13 @@ def create_model(
             model_cfg['vision_cfg']['image_size'] = force_image_size
 
         is_timm_model = 'timm_model_name' in model_cfg.get('vision_cfg', {})
+        is_hf_vision_model = 'hf_vision_model_name' in model_cfg.get('vision_cfg', {})
         if pretrained_image:
             if is_timm_model:
                 # pretrained weight loading for timm models set via vision_cfg
                 model_cfg['vision_cfg']['timm_model_pretrained'] = True
+            elif is_hf_vision_model:
+                model_cfg['vision_cfg']['hf_vision_model_pretrained'] = True
             else:
                 assert (
                     False

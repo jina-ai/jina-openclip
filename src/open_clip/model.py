@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .hf_model import HFTextEncoder
+from .hf_model import HFTextEncoder, HFVisionEncoder
 from .modified_resnet import ModifiedResNet
 from .pretrained import download_pretrained, get_pretrained_cfg
 from .timm_model import TimmModel
@@ -77,6 +77,21 @@ class CLIPVisionCfg:
     timm_drop: float = 0.0  # head dropout
     timm_drop_path: Optional[float] = None  # backbone stochastic depth
 
+    hf_vision_model_name: Optional[
+        str
+    ] = None  # a valid model name overrides layers, width, patch_size
+    hf_vision_model_pretrained: bool = (
+        False  # use (imagenet) pretrained weights for named model
+    )
+    hf_vision_pool: str = (
+        'avg'  # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
+    )
+    hf_vision_proj: str = (
+        'linear'  # linear projection for timm model output ('linear', 'mlp', '')
+    )
+    hf_vision_proj_bias: bool = False  # enable bias final projection
+    hf_vision_drop: float = 0.0  # head dropout
+    hf_vision_drop_path: Optional[float] = None  # backbone stochastic depth
 
 @dataclass
 class CLIPTextCfg:
@@ -259,6 +274,16 @@ def _build_vision_tower(
             if vision_cfg.patch_dropout > 0
             else None,
             embed_dim=embed_dim,
+            image_size=vision_cfg.image_size,
+        )
+    elif vision_cfg.hf_vision_model_name:
+        visual = HFVisionEncoder(
+            vision_cfg.hf_vision_model_name,
+            output_dim=embed_dim,
+            proj_type=vision_cfg.hf_vision_proj,
+            pool_type=vision_cfg.hf_vision_pool,
+            pretrained=vision_cfg.hf_vision_model_pretrained,
+            output_tokens=vision_cfg.output_tokens,
             image_size=vision_cfg.image_size,
         )
     elif isinstance(vision_cfg.layers, (tuple, list)):
