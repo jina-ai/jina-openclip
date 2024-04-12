@@ -118,6 +118,7 @@ class HFTextEncoder(nn.Module):
         config: PretrainedConfig = None,
         pooler_type: str = None,
         proj_type: str = None,
+        proj_bias: bool = False,
         pretrained: bool = True,
         output_tokens: bool = False,
         trust_remote_code: bool = False,
@@ -177,13 +178,13 @@ class HFTextEncoder(nn.Module):
         if (d_model == output_dim) and (proj_type is None):  # do we always need a proj?
             self.proj = nn.Identity()
         elif proj_type == 'linear':
-            self.proj = nn.Linear(d_model, output_dim, bias=False)
+            self.proj = nn.Linear(d_model, output_dim, bias=proj_bias)
         elif proj_type == 'mlp':
             hidden_size = (d_model + output_dim) // 2
             self.proj = nn.Sequential(
-                nn.Linear(d_model, hidden_size, bias=False),
+                nn.Linear(d_model, hidden_size, bias=proj_bias),
                 nn.GELU(),
-                nn.Linear(hidden_size, output_dim, bias=False),
+                nn.Linear(hidden_size, output_dim, bias=proj_bias),
             )
 
     def forward(self, x: TensorType):
@@ -256,10 +257,10 @@ class HFVisionEncoder(nn.Module):
         config: PretrainedConfig = None,
         pool_type: str = 'tok',
         proj_type: Optional[str] = None,
+        proj_bias: bool = False,
         pretrained: bool = True,
         output_tokens: bool = False,
         trust_remote_code: bool = False,
-        revision: Optional[str] = None,
     ):
         super().__init__()
         self.output_tokens = output_tokens
@@ -273,8 +274,7 @@ class HFVisionEncoder(nn.Module):
         if config is None:
             self.config = AutoConfig.from_pretrained(
                 model_name_or_path,
-                trust_remote_code=trust_remote_code,
-                code_revision=revision,
+                trust_remote_code=trust_remote_code
             )
             create_func, model_args = (
                 (AutoModel.from_pretrained, model_name_or_path)
@@ -291,8 +291,7 @@ class HFVisionEncoder(nn.Module):
             else:
                 self.transformer = create_func(
                     model_args,
-                    trust_remote_code=trust_remote_code,
-                    code_revision=revision
+                    trust_remote_code=trust_remote_code
                 )
         else:
             self.config = config
@@ -307,13 +306,13 @@ class HFVisionEncoder(nn.Module):
         if (d_model == output_dim) and (proj_type is None):  # do we always need a proj?
             self.proj = nn.Identity()
         elif proj_type == 'linear':
-            self.proj = nn.Linear(d_model, output_dim, bias=False)
+            self.proj = nn.Linear(d_model, output_dim, bias=proj_bias)
         elif proj_type == 'mlp':
             hidden_size = (d_model + output_dim) // 2
             self.proj = nn.Sequential(
-                nn.Linear(d_model, hidden_size, bias=False),
+                nn.Linear(d_model, hidden_size, bias=proj_bias),
                 nn.GELU(),
-                nn.Linear(hidden_size, output_dim, bias=False),
+                nn.Linear(hidden_size, output_dim, bias=proj_bias),
             )
 
     def _global_pool(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -340,7 +339,8 @@ class HFVisionEncoder(nn.Module):
                     (not freeze_bn_stats) if 'LayerNorm' in n.split('.') else False
                 )
             return
-
+        
+        #TODO: make it work if unlocked_layers !=0 
         encoder = (
             self.transformer.encoder
             if hasattr(self.transformer, 'encoder')
