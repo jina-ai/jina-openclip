@@ -69,9 +69,20 @@ def create_optimizer(args, model: nn.Module, dsinit=None):
         )
     else:
         if args.optimizer == 'lamb':
-            warnings.warn('LAMB optimizer is only supported when using DeepSpeed')
-
-        optimizer = optim.AdamW(params, betas=(args.beta1, args.beta2), eps=args.eps)
+            try:
+                from deepspeed.ops.lamb import FusedLamb
+            except ModuleNotFoundError or ImportError:
+                raise ModuleNotFoundError(
+                    'DeepSpeed is required in order to use the LAMB optimizer, use '
+                    '\'pip install deepspeed\' to install'
+                )
+            optimizer = FusedLamb(
+                params=params, betas=(args.beta1, args.beta2), eps=args.eps
+            )
+        else:
+            optimizer = optim.AdamW(
+                params, betas=(args.beta1, args.beta2), eps=args.eps
+            )
 
         if args.horovod:
             try:
