@@ -168,7 +168,7 @@ def train_one_epoch(
 
     accum_images, accum_texts, accum_features = [], [], {}
     accum_emb_datasets, accum_emb_batches, accum_emb_labels, accum_embeddings = (
-        [], [], [], []
+        [], [], {}, {}
     )
 
     losses_m = {}
@@ -275,18 +275,33 @@ def train_one_epoch(
                             accum_features[key] = [val]
 
                     if args.mtl:
-                        embeddings = model(emb_batch)
+                        embeddings = [
+                            model.module.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
+                            if isinstance(model, nn.parallel.DistributedDataParallel)
+                            else model.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
+                            for embedding in emb_batch
+                        ]
+
                         for j, embedding in enumerate(embeddings):
-                            if len(accum_embeddings) == 0:
-                                accum_embeddings.append([embedding])
-                            else:
+                            if j in accum_embeddings:
                                 accum_embeddings[j].append(embedding)
+                            else:
+                                accum_embeddings[j] = [embedding]
+
+                        for j, label in enumerate(emb_labels):
+                            if j in accum_emb_labels:
+                                accum_emb_labels[j].append(label)
+                            else:
+                                accum_emb_labels[j] = [label]
 
                 accum_images.append(images)
                 accum_texts.append(texts)
                 if args.mtl:
                     accum_emb_datasets.append(emb_dataset)
-                    accum_emb_labels.append(emb_labels)
                     accum_emb_batches.append(emb_batch)
 
             # If (i + 1) % accum_freq is not zero, move on to the next batch.
@@ -332,30 +347,45 @@ def train_one_epoch(
                     total_loss = contrastive_loss
 
                     if args.mtl:
-                        _emb_dataset = accum_emb_datasets[k]
-                        _emb_batch = accum_emb_batches[k]
-                        _emb_loss_fn = (
-                            emb_losses[_emb_dataset]
+                        emb_dataset = accum_emb_datasets[k]
+                        emb_batch = accum_emb_batches[k]
+                        emb_loss_fn = (
+                            emb_losses[emb_dataset]
                             if emb_dataset in emb_losses else emb_losses['*']
                         )
-                        _embeddings = model(_emb_batch)
+                        embeddings = [
+                            model.module.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
+                            if isinstance(model, nn.parallel.DistributedDataParallel)
+                            else model.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
+                            for embedding in emb_batch
+                        ]
 
                         inputs = []
-                        for val in accum_embeddings:
+                        for idx, value in accum_embeddings.items():
                             inputs.append(
-                                torch.cat(val[:k] + [_embeddings] + val[k+1:])
+                                torch.cat(value[:k] + [embeddings[idx]] + value[k+1:])
                             )
-                        labels = torch.cat(accum_emb_labels)
+                        emb_labels = []
+                        for idx, value in accum_emb_labels.items():
+                            emb_labels.append(torch.cat(value))
 
                         if args.emb_global_batch:
-                            assert len(labels) == 0
-                            grads, _ = get_global_batch_grads(
-                                inputs, emb_loss_fn, args
+                            assert len(emb_labels) == 0, (
+                                'Global batch cannot be used in conjunction with labeled '
+                                'data'
                             )
-                            embedding_loss = get_surrogate_loss(inputs, grads)
+                            all_inputs = [
+                                embeddings_gather(emb) for emb in inputs
+                            ]
+                            embedding_loss = emb_loss_fn(*all_inputs)
                         else:
-                            embedding_loss = emb_loss_fn(*inputs, *labels)
+                            embedding_loss = emb_loss_fn(*inputs, *emb_labels)
 
+                        del inputs
                         losses['embedding_loss'] = embedding_loss
                         total_loss += args.emb_loss_weight * embedding_loss
 
@@ -396,7 +426,7 @@ def train_one_epoch(
                 accum_emb_batches,
                 accum_emb_labels,
                 accum_embeddings
-            ) = [], [], [], []
+            ) = [], [], {}, {}
 
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.
         with torch.no_grad():

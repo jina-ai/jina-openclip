@@ -120,7 +120,9 @@ def init_distributed_device(args):
 
         with open(args.deepspeed_config, 'w') as f:
             dsconfig = {
-                'train_batch_size': args.batch_size *args. world_size,
+                'train_batch_size': (
+                    args.batch_size * args. world_size * args.accum_freq
+                ),
                 'train_micro_batch_size_per_gpu': args.batch_size,
                 'gradient_accumulation_steps': args.accum_freq,
                 'steps_per_print': args.log_every_n_steps,
