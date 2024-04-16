@@ -1,5 +1,6 @@
 import argparse
 import ast
+import os
 
 
 def get_default_params(model_name):
@@ -174,6 +175,15 @@ def parse_args(args):
         action='store_true',
         default=False,
         help='Use this flag to skip the learning rate decay.',
+    )
+    parser.add_argument(
+        '--optimizer',
+        type=str,
+        default='adamw',
+        help=(
+            'Optimizer type, one of \'adamw\' or \'lamb\', '
+            '\'lamb\' is only available when using DeepSpeed'
+        ),
     )
     parser.add_argument(
         '--lr-scheduler',
@@ -434,6 +444,24 @@ def parse_args(args):
         help='Use horovod for distributed training.',
     )
     parser.add_argument(
+        '--deepspeed',
+        action='store_true',
+        default=False,
+        help='Use deepspeed for distributed training.'
+    )
+    parser.add_argument(
+        '--zero-stage',
+        type=int,
+        default=1,
+        help='Stage of ZeRO algorith, applicable if deepspeed is enabled.'
+    )
+    parser.add_argument(
+        '--zero-bucket-size',
+        type=int,
+        default=1e6,
+        help='ZeRO algorith allgather and reduce bucket size.'
+    )
+    parser.add_argument(
         '--ddp-static-graph',
         default=False,
         action='store_true',
@@ -660,13 +688,26 @@ def parse_args(args):
         default=1.0,
         help='The weighing factor for the embedding loss.',
     )
+    parser.add_argument('--local_rank', type=int, default=0)
 
     args = parser.parse_args(args)
 
     # If some params are not passed, we use the default values based on model name.
-    default_params = get_default_params(args.model)
-    for name, val in default_params.items():
+    defaultparams = get_default_params(args.model)
+    for name, val in defaultparams.items():
         if getattr(args, name) is None:
             setattr(args, name, val)
 
-    return args
+    if args.deepspeed:
+        try:
+            import deepspeed
+            os.environ['ENV_TYPE'] = 'deepspeed'
+            dsinit = deepspeed.initialize
+        except ImportError or ModuleNotFoundError:
+            print('DeepSpeed is not available, please run \'pip install deepspeed\'')
+            exit(0)
+    else:
+        os.environ['ENV_TYPE'] = 'pytorch'
+        dsinit = None
+
+    return args, dsinit

@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import timedelta
 
@@ -24,7 +25,8 @@ def is_master(args, local=False):
 
 def is_using_horovod():
     # NOTE w/ horovod run, OMPI vars should be set, but w/ SLURM PMI vars will be set
-    # Differentiating between horovod and DDP use via SLURM may not be possible, so horovod arg still required...
+    # Differentiating between horovod and DDP use via SLURM may not be possible, so 
+    # horovod arg still required...
     ompi_vars = ['OMPI_COMM_WORLD_RANK', 'OMPI_COMM_WORLD_SIZE']
     pmi_vars = ['PMI_RANK', 'PMI_SIZE']
     if all([var in os.environ for var in ompi_vars]) or all(
@@ -85,6 +87,117 @@ def init_distributed_device(args):
         os.environ['LOCAL_RANK'] = str(args.local_rank)
         os.environ['RANK'] = str(args.rank)
         os.environ['WORLD_SIZE'] = str(args.world_size)
+    elif args.deepspeed:
+        args.local_rank, args.rank, args.world_size = world_info_from_env()
+        args.deepspeed_config = os.path.join(os.getcwd(), 'deepspeed.json')
+        args.distributed = True
+
+        if args.optimizer == 'lamb':
+            optimizer = {
+                'type': 'Lamb',
+                'params': {
+                    'bias_correction': True,
+                    'betas': [
+                        args.beta1,
+                        args.beta2
+                    ],
+                    'eps': args.eps
+                }
+            }
+        else:
+            optimizer = {
+                'type': 'Adam',
+                'adam_w_mode': True,
+                'params': {
+                    'bias_correction': True,
+                    'betas': [
+                        args.beta1,
+                        args.beta2
+                    ],
+                    'eps': args.eps
+                }
+            }
+
+        with open(args.deepspeed_config, 'w') as f:
+            dsconfig = {
+                'train_batch_size': (
+                    args.batch_size * args. world_size * args.accum_freq
+                ),
+                'train_micro_batch_size_per_gpu': args.batch_size,
+                'gradient_accumulation_steps': args.accum_freq,
+                'steps_per_print': args.log_every_n_steps,
+                'zero_allow_untested_optimizer': True,
+                'optimizer': optimizer,
+                'fp16': {
+                    'enabled': args.precision == 'fp16' or args.precision == 'float16',
+                    'loss_scale': 0,
+                    'initial_scale_power': 16,
+                    'loss_scale_window': 1000,
+                    'hysteresis': 2,
+                    'min_loss_scale': 1
+                },
+                'bf16': {
+                    'enabled': args.precision == 'bf16' or args.precision == 'bfloat16',
+                },
+                'amp': {
+                    'enabled': args.precision == 'amp',
+                    'opt_level': 'O2'
+                },
+                # 'flops_profiler': {
+                #     'enabled': True,
+                #     'profile_step': -1,
+                #     'module_depth': -1,
+                #     'top_modules': 1,
+                #     'detailed': True,
+                # },
+                'comms_logger': {
+                    'enabled': True,
+                    'verbose': False,
+                    'prof_all': True,
+                    'debug': False
+                }
+            }
+
+            if args.grad_clip_norm is not None:
+                dsconfig.update({'gradient_clipping': args.grad_clip_norm})
+
+            zero_optimization = {'stage': 0}
+            if args.zero_stage == 1:
+                zero_optimization = {
+                    'stage': 1,
+                    'allgather_bucket_size': args.zero_bucket_size,
+                    'reduce_bucket_size': args.zero_bucket_size,
+                }
+            elif args.zero_stage == 2:
+                zero_optimization = {
+                    'stage': 2,
+                    'contiguous_gradients': True,
+                    'overlap_comm': True,
+                    'reduce_scatter': True,
+                    'allgather_bucket_size': args.zero_bucket_size,
+                    'reduce_bucket_size': args.zero_bucket_size,
+                }
+            elif args.zero_stage == 3:
+                zero_optimization = {
+                    'stage': 3,
+                    'contiguous_gradients': True,
+                    'stage3_max_live_parameters': 1e9,
+                    'stage3_max_reuse_distance': 1e9,
+                    'stage3_prefetch_bucket_size': 1e7,
+                    'stage3_param_persistence_threshold': 1e5,
+                    'sub_group_size': 1e9,
+                    'offload_optimizer': {
+                        'device': 'cpu'
+                    },
+                    'offload_param': {
+                        'device': 'cpu'
+                    },
+                    'allgather_bucket_size': args.zero_bucket_size,
+                    'reduce_bucket_size': args.zero_bucket_size,
+                }
+            dsconfig['zero_optimization'] = zero_optimization
+
+            f.write(json.dumps(dsconfig, indent=2))
     elif is_using_distributed():
         if 'SLURM_PROCID' in os.environ:
             # DDP via SLURM

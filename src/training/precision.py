@@ -4,7 +4,7 @@ import torch
 
 
 def get_autocast(precision):
-    if precision == 'amp':
+    if precision == 'amp' or precision == 'float16' or precision == 'fp16':
         return torch.cuda.amp.autocast
     elif precision == 'amp_bfloat16' or precision == 'amp_bf16':
         # amp_bfloat16 is more stable than amp float16 for clip training

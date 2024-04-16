@@ -9,3 +9,5 @@ protobuf
 timm
 einops
 transformers
+py-cpuinfo
+deepspeed

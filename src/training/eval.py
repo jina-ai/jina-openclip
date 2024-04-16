@@ -22,8 +22,8 @@ from open_clip import (
     get_tokenizer,
 )
 
-from .distributed import is_master
-from .precision import get_autocast
+from training.distributed import is_master
+from training.precision import get_autocast
 
 MTEB_LOGGING_METRICS = ['ndcg_at_10', 'cos_sim']
 
@@ -259,23 +259,25 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
     else:
         module = model
 
-    results = run_benchmark(
-        datasets=[t for t in args.clip_benchmark_datasets.split(',')],
-        models=[
-            CLIPBenchmarkModel(
-                name=args.model,
-                pretrained=args.name + f'-epoch#{epoch}',
-                module=module,
-                tokenizer=tokenizer,
-                transform=transform,
-            )
-        ],
-        task='auto',
-        output=None,
-        dataset_root=args.clip_benchmark_dataset_root,
-        distributed=False,
-        recall_ks=[int(k) for k in args.clip_benchmark_recall_ks.split(',')],
-    )
+    autocast = get_autocast(args.precision)
+    with autocast():
+        results = run_benchmark(
+            datasets=[t for t in args.clip_benchmark_datasets.split(',')],
+            models=[
+                CLIPBenchmarkModel(
+                    name=args.model,
+                    pretrained=args.name + f'-epoch#{epoch}',
+                    module=module,
+                    tokenizer=tokenizer,
+                    transform=transform,
+                )
+            ],
+            task='auto',
+            output=None,
+            dataset_root=args.clip_benchmark_dataset_root,
+            distributed=False,
+            recall_ks=[int(k) for k in args.clip_benchmark_recall_ks.split(',')],
+        )
     metrics = {}
     for result in results:
         dataset = result['dataset']
