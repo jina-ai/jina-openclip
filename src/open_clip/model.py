@@ -62,21 +62,13 @@ class CLIPVisionCfg:
 
     # TIMM specific vision tower config
     # a valid model name overrides layers, width, patch_size
-    timm_model_name: Optional[
-        str
-    ] = None
+    timm_model_name: Optional[str] = None
     # use (imagenet) pretrained weights for named model
-    timm_model_pretrained: bool = (
-        False
-    )
+    timm_model_pretrained: bool = False
     # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
-    timm_pool: str = (
-        'avg'  
-    )
+    timm_pool: str = 'avg'
     # linear projection for timm model output ('linear', 'mlp', '')
-    timm_proj: str = (
-        'linear'  
-    )
+    timm_proj: str = 'linear'
     # enable bias final projection
     timm_proj_bias: bool = False
     # head dropout
@@ -84,23 +76,15 @@ class CLIPVisionCfg:
     # backbone stochastic depth
     timm_drop_path: Optional[float] = None
 
-    # ΗΦ specific vision tower config
+    # hf specific vision tower config
     # a valid model name overrides layers, width, patch_size
-    hf_vision_model_name: Optional[
-        str
-    ] = None
+    hf_vision_model_name: Optional[str] = None
     # use (imagenet) pretrained weights for named model
-    hf_vision_model_pretrained: bool = (
-        False
-    )
-    # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
-    hf_vision_pool: str = (
-        'avg'
-    )
-    # linear projection for timm model output ('linear', 'mlp', '')
-    hf_vision_proj: str = (
-        'linear'
-    )
+    hf_vision_model_pretrained: bool = False
+    # feature pooling for timm model ('tok', 'avg', '')
+    hf_vision_pool: str = 'avg'
+    # linear projection for hf vision encoder output ('linear', 'mlp', '')
+    hf_vision_proj: str = 'linear'
     # enable bias final projection
     hf_vision_proj_bias: bool = False
     # vision model hidden states dropout
