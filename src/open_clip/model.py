@@ -61,37 +61,54 @@ class CLIPVisionCfg:
     pt_proj_exclude: bool = True
 
     # TIMM specific vision tower config
+    # a valid model name overrides layers, width, patch_size
     timm_model_name: Optional[
         str
-    ] = None  # a valid model name overrides layers, width, patch_size
+    ] = None
+    # use (imagenet) pretrained weights for named model
     timm_model_pretrained: bool = (
-        False  # use (imagenet) pretrained weights for named model
+        False
     )
+    # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
     timm_pool: str = (
-        'avg'  # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
+        'avg'  
     )
+    # linear projection for timm model output ('linear', 'mlp', '')
     timm_proj: str = (
-        'linear'  # linear projection for timm model output ('linear', 'mlp', '')
+        'linear'  
     )
-    timm_proj_bias: bool = False  # enable bias final projection
-    timm_drop: float = 0.0  # head dropout
-    timm_drop_path: Optional[float] = None  # backbone stochastic depth
+    # enable bias final projection
+    timm_proj_bias: bool = False
+    # head dropout
+    timm_drop: float = 0.0
+    # backbone stochastic depth
+    timm_drop_path: Optional[float] = None
 
+    # ΗΦ specific vision tower config
+    # a valid model name overrides layers, width, patch_size
     hf_vision_model_name: Optional[
         str
-    ] = None  # a valid model name overrides layers, width, patch_size
+    ] = None
+    # use (imagenet) pretrained weights for named model
     hf_vision_model_pretrained: bool = (
-        False  # use (imagenet) pretrained weights for named model
+        False
     )
+    # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
     hf_vision_pool: str = (
-        'avg'  # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
+        'avg'
     )
+    # linear projection for timm model output ('linear', 'mlp', '')
     hf_vision_proj: str = (
-        'linear'  # linear projection for timm model output ('linear', 'mlp', '')
+        'linear'
     )
-    hf_vision_proj_bias: bool = False  # enable bias final projection
-    hf_vision_drop: float = 0.0  # head dropout
-    hf_vision_drop_path: Optional[float] = None  # backbone stochastic depth
+    # enable bias final projection
+    hf_vision_proj_bias: bool = False
+    # vision model hidden states dropout
+    hf_vision_hidden_states_drop: float = 0.0
+    # vision model attention probabilities dropout
+    hf_vision_attn_drop: float = 0.0
+    # backbone stochastic depth
+    hf_vision_drop_path: Optional[float] = None
 
 @dataclass
 class CLIPTextCfg:
@@ -286,6 +303,9 @@ def _build_vision_tower(
             pretrained=vision_cfg.hf_vision_model_pretrained,
             output_tokens=vision_cfg.output_tokens,
             image_size=vision_cfg.image_size,
+            attn_drop=vision_cfg.hf_vision_attn_drop,
+            hidden_drop=vision_cfg.hf_vision_hidden_states_drop,
+            drop_path=vision_cfg.hf_vision_drop_path
         )
     elif isinstance(vision_cfg.layers, (tuple, list)):
         vision_heads = vision_cfg.width * 32 // vision_cfg.head_width

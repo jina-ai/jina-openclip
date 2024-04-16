@@ -258,6 +258,9 @@ class HFVisionEncoder(nn.Module):
         pool_type: str = 'tok',
         proj_type: Optional[str] = None,
         proj_bias: bool = False,
+        attn_drop: float = 0.0,
+        hidden_drop: float = 0.0,
+        drop_path: Optional[float] = None,
         pretrained: bool = True,
         output_tokens: bool = False,
         trust_remote_code: bool = False,
@@ -274,25 +277,23 @@ class HFVisionEncoder(nn.Module):
         if config is None:
             self.config = AutoConfig.from_pretrained(
                 model_name_or_path,
-                trust_remote_code=trust_remote_code
+                trust_remote_code=trust_remote_code,
+                hidden_dropout_prob=hidden_drop,
+                attention_probs_dropout_prob=attn_drop,
+                drop_path_rate=drop_path,
             )
             create_func, model_args = (
                 (AutoModel.from_pretrained, model_name_or_path)
                 if pretrained
                 else (AutoModel.from_config, self.config)
             )
-            # TODO: do all model configs have this attribute? PretrainedConfig does so yes??
-            if (
-                hasattr(self.config, 'is_encoder_decoder')
-                and self.config.is_encoder_decoder
-            ):
-                self.transformer = create_func(model_args)
-                self.transformer = self.transformer.encoder
-            else:
-                self.transformer = create_func(
-                    model_args,
-                    trust_remote_code=trust_remote_code
-                )
+            self.transformer = create_func(
+                model_args,
+                trust_remote_code=trust_remote_code,
+                hidden_dropout_prob=hidden_drop,
+                attention_probs_dropout_prob=attn_drop,
+                drop_path_rate=drop_path,
+            )
         else:
             self.config = config
             self.transformer = AutoModel.from_config(config)
