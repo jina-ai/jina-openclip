@@ -1,5 +1,6 @@
 logs/
 wandb/
+workspace/
 models/
 features/
 results/

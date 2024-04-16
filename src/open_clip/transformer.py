@@ -1,12 +1,15 @@
 import math
+import os
 from collections import OrderedDict
-from functools import partial
 from typing import Callable, Optional, Sequence, Tuple
 
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.checkpoint import checkpoint
+if os.getenv('ENV_TYPE') == 'deepspeed':
+    from deepspeed.runtime.activation_checkpointing.checkpointing import checkpoint
+else:
+    from torch.utils.checkpoint import checkpoint
 
 from .pos_embed import get_2d_sincos_pos_embed
 from .utils import to_2tuple

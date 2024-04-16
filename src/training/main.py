@@ -12,7 +12,6 @@ from functools import partial
 
 import numpy as np
 import torch
-from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
@@ -26,11 +25,6 @@ try:
 except ImportError:
     tensorboard = None
 
-try:
-    import horovod.torch as hvd
-except ImportError:
-    hvd = None
-
 from open_clip import (
     create_loss,
     create_model_and_transforms,
@@ -40,7 +34,7 @@ from open_clip import (
 
 from training.data import MultiS3EmbeddingDataset, dynamic_collate, get_multimodal_data
 from training.distributed import broadcast_object, init_distributed_device, is_master
-from training.evaluate import evaluate
+from training.eval import evaluate
 from training.fileutils import pt_load, remote_sync, start_sync_process
 from training.logger import setup_logging
 from training.optimizer import create_optimizer
@@ -180,7 +174,7 @@ def create_embeddings_dataloader(args):
 
 
 def main(args):
-    args = parse_args(args)
+    args, dsinit = parse_args(args)
 
     if torch.cuda.is_available():
         # This enables tf32 on Ampere GPUs which is only 8% slower than
@@ -198,13 +192,13 @@ def main(args):
         # sanitize model name for filesystem / uri use,
         # easier if we don't use / in name as a rule?
         model_name_safe = args.model.replace('/', '-')
-        date_str = datetime.now().strftime('%Y_%m_%d-%H_%M_%S')
+        datestr = datetime.now().strftime('%Y_%m_%d-%H_%M_%S')
         if args.distributed:
             # sync date_str from master to all ranks
-            date_str = broadcast_object(args, date_str)
+            datestr = broadcast_object(args, datestr)
         args.name = '-'.join(
             [
-                date_str,
+                datestr,
                 f'model_{model_name_safe}',
                 f'lr_{args.lr}',
                 f'b_{args.batch_size}',
@@ -261,6 +255,7 @@ def main(args):
             if args.remote_sync_protocol != 's3':
                 print('Error. Sync protocol not supported when using resume latest.')
                 return -1
+
         if is_master(args):
             # Checking for existing checkpoint via master rank only. It is possible for
             # different rank processes to see different files if a shared file-system
@@ -436,7 +431,7 @@ def main(args):
                 logging.info(f'  {name}: {val}')
                 f.write(f'{name}: {val}\n')
 
-    if args.distributed and not args.horovod:
+    if args.distributed and not args.horovod and not args.deepspeed:
         if args.use_bn_sync:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         ddp_args = {}
@@ -458,48 +453,62 @@ def main(args):
 
     if args.train_data or args.dataset_type == 'synthetic':
         assert not args.trace, 'Cannot train with traced model'
-        optimizer = create_optimizer(
-            model=model,
-            base_lr=args.lr,
-            base_text_lr = args.text_lr,
-            weight_decay=args.wd,
-            beta1=args.beta1,
-            beta2=args.beta2,
-            eps=args.eps,
-            text_lr_decay=args.text_lr_decay,
-            vision_lr_decay=args.vision_lr_decay,
+        model, optimizer, scaler = create_optimizer(
+            args=args, model=model, dsinit=dsinit
         )
-        if args.horovod:
-            optimizer = hvd.DistributedOptimizer(
-                optimizer, named_parameters=model.named_parameters()
-            )
-            hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-            hvd.broadcast_optimizer_state(optimizer, root_rank=0)
-
-        scaler = GradScaler() if args.precision == 'amp' else None
 
     # optionally resume from a checkpoint
     start_epoch = 0
     if args.resume is not None:
-        checkpoint = pt_load(os.path.join(args.resume, 'state.pt'), map_location='cpu')
-        if 'epoch' in checkpoint:
-            # resuming a train checkpoint w/ epoch and optimizer state
-            start_epoch = checkpoint['epoch']
-            sd = checkpoint['state_dict']
-            if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
-                sd = {k[len('module.'):]: v for k, v in sd.items()}
-            model.load_state_dict(sd)
-            if optimizer is not None:
-                optimizer.load_state_dict(checkpoint['optimizer'])
-            if scaler is not None and 'scaler' in checkpoint:
-                scaler.load_state_dict(checkpoint['scaler'])
-            logging.info(
-                f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})"
-            )
+        if args.deepspeed:
+            if os.path.exists(args.resume):
+                import glob
+                all_checkpoints = glob.glob(os.path.join(args.resume, 'epoch_*'))
+                latest_ckpt = -1
+                for ckpt in all_checkpoints:
+                    t = ckpt.split('/')[-1].split('_')[1]
+                    if t.isdigit():
+                        latest_ckpt = max(int(t), latest_ckpt)
+                if latest_ckpt >= 0:
+                    start_epoch = latest_ckpt
+                    _, client_states = model.load_checkpoint(
+                        args.resume, tag=f'epoch_{latest_ckpt}'
+                    )
+                    logging.info(
+                        f'=> resuming checkpoint \'{args.resume}\' '
+                        f'(epoch {latest_ckpt})'
+                    )
+                else:
+                    logging.info(f'=> no checkpoint found at \'{args.resume}\'')
+            else:
+                logging.info(f'=> \'{args.resume}\' does not exist!')
         else:
-            # loading a bare (model only) checkpoint for fine-tune or evaluation
-            model.load_state_dict(checkpoint)
-            logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
+            checkpoint = pt_load(
+                os.path.join(args.resume, 'state.pt'), map_location='cpu'
+            )
+            if 'epoch' in checkpoint:
+                # resuming a train checkpoint w/ epoch and optimizer state
+                start_epoch = checkpoint['epoch']
+                sd = checkpoint['state_dict']
+                if (
+                    not args.distributed
+                    and next(iter(sd.items()))[0].startswith('module')
+                ):
+                    sd = {k[len('module.'):]: v for k, v in sd.items()}
+                model.load_state_dict(sd)
+                if optimizer is not None:
+                    optimizer.load_state_dict(checkpoint['optimizer'])
+                if scaler is not None and 'scaler' in checkpoint:
+                    scaler.load_state_dict(checkpoint['scaler'])
+                logging.info(
+                    f'=> resuming checkpoint \'{args.resume}\' (epoch {start_epoch})'
+                )
+            else:
+                # loading a bare (model only) checkpoint for fine-tune or evaluation
+                model.load_state_dict(checkpoint)
+                logging.info(
+                    f'=> loaded checkpoint \'{args.resume}\' (epoch {start_epoch})'
+                )
 
     # initialize datasets
     # multimodal
@@ -631,7 +640,20 @@ def main(args):
         completed_epoch = epoch + 1
 
         # Saving checkpoints.
-        if args.save_logs:
+        # is_master(args) can not be here while using deepspped, otherwise ckpts
+        # can not be saved
+        if args.logs and args.logs.lower() != 'none' and args.enable_deepspeed:
+            ds_checkpoint_path = os.path.join(args.logs, args.name, 'checkpoints')
+            if completed_epoch == args.epochs or (
+                args.save_frequency > 0 and (completed_epoch % args.save_frequency) == 0
+            ):
+                client_state = {'epoch': completed_epoch}
+                model.save_checkpoint(
+                    save_dir=ds_checkpoint_path,
+                    tag=f'epoch_{str(completed_epoch)}',
+                    client_state=client_state
+                )
+        elif args.save_logs:
             checkpoint_dict = {
                 'epoch': completed_epoch,
                 'name': args.name,
