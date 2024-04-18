@@ -292,7 +292,6 @@ class HFVisionEncoder(nn.Module):
                 trust_remote_code=trust_remote_code,
                 hidden_dropout_prob=hidden_drop,
                 attention_probs_dropout_prob=attn_drop,
-                drop_path_rate=drop_path,
             )
         else:
             self.config = config
