@@ -1,7 +1,7 @@
 import itertools
-import math
 from copy import deepcopy
 from enum import IntEnum
+from typing import Iterable, Optional
 
 import pytorch_metric_learning.distances as pml_distances
 import torch
@@ -270,10 +270,8 @@ class MultiCELoss(nn.Module):
         alpha: float = 1.0,
         beta: float = 0.0,
         temperature: float = 0.05,
-        bidirectional: bool = False,
-        single_info_nce: bool = False,
-        mem_opt: bool = False,
-        chunk_size: int = 8,
+        bidirectional: bool = True,
+        single_info_nce: bool = True,
     ):
         super(MultiCELoss, self).__init__()
 
@@ -283,16 +281,9 @@ class MultiCELoss(nn.Module):
             )
 
         self._kl_loss = nn.KLDivLoss(reduction="batchmean")
-        if mem_opt:
-            self._info_nce_loss = InfoNCEHardNegativeLossMemOpt(
-                temperature=temperature,
-                bidirectional=bidirectional,
-                chunk_size=chunk_size,
-            )
-        else:
-            self._info_nce_loss = InfoNCEHardNegativeLoss(
-                temperature=temperature, bidirectional=bidirectional
-            )
+        self._info_nce_loss = InfoNCEHardNegativeLoss(
+            temperature=temperature, bidirectional=bidirectional
+        )
         self._alpha = alpha
         self._beta = beta
         self._single_info_nce = single_info_nce
@@ -362,6 +353,78 @@ class MultiCELoss(nn.Module):
             return InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES
 
 
+class MRLMultiCELoss(MultiCELoss):
+    def __init__(
+        self,
+        alpha: float = 0.2,
+        beta: float = 1.0,
+        temperature: float = 0.05,
+        bidirectional: bool = False,
+        single_info_nce: bool = False,
+        dims: Iterable[int] = (16, 32, 64, 128, 256, 512),
+        weights: Optional[Iterable[int]] = None,
+    ):
+        super().__init__(
+            alpha,
+            beta,
+            temperature,
+            bidirectional,
+            single_info_nce,
+        )
+        if weights:
+            assert len(weights) == len(dims)
+        self._dims = dims
+        self._weights = weights if weights else [1] * len(self._dims)
+
+    def forward(self, embeddings, scores, row_sizes):
+        scores_masks = row_sizes - 1
+        weighted_loss = 0.0
+        for dim, weight in zip(self._dims, self._weights):
+            loss = None
+            batch_count = 0
+            anchor_embeddings = []
+            pos_embeddings = []
+            neg_embeddings = []
+            for emb_row, score_row in zip(
+                self._iterate_batch(embeddings, row_sizes),
+                self._iterate_batch(scores, scores_masks),
+            ):
+                anc = emb_row[0].unsqueeze(0)[:, :dim]
+                pos = emb_row[1].unsqueeze(0)[:, :dim]
+                neg = emb_row[2:, :dim]
+                pos_score = torch.functional.F.cosine_similarity(anc, pos)
+                neg_scores = torch.functional.F.cosine_similarity(anc, neg)
+                emb_scores = torch.nn.functional.log_softmax(
+                    torch.cat([pos_score, neg_scores]), dim=0
+                )
+                if self._beta > 0:
+                    ce_scores = torch.nn.functional.softmax(torch.stack(score_row))
+                    kl_loss = self._kl_loss(emb_scores, ce_scores)
+                else:
+                    kl_loss = 0.0
+                if loss is None:
+                    loss = self._beta * kl_loss
+                else:
+                    loss += self._beta * kl_loss
+                if not self._single_info_nce:
+                    loss += self._alpha * self._info_nce_loss(anc, pos, neg)
+                else:
+                    anchor_embeddings.append(anc)
+                    pos_embeddings.append(pos)
+                    neg_embeddings.append(neg)
+                batch_count += 1
+            loss /= batch_count
+            if self._single_info_nce:
+                loss += self._alpha * self._info_nce_loss(
+                    torch.cat(anchor_embeddings),
+                    torch.cat(pos_embeddings),
+                    torch.cat(neg_embeddings),
+                )
+            weighted_loss += loss * weight
+
+        return weighted_loss
+
+
 class MarginMSELoss(nn.Module):
     def __init__(self):
         super(MarginMSELoss, self).__init__()
@@ -422,56 +485,6 @@ class InfoNCEHardNegativeLoss(nn.Module):
         if self._bidirectional:
             scores = cos_sim(embedding_pos, embedding_anchor) / self.temperature
             loss += self.loss(scores, labels)
-        return loss
-
-    @property
-    def input_type(self):
-        return InputType.TRIPLET
-
-
-class InfoNCEHardNegativeLossMemOpt(nn.Module):
-    def __init__(
-        self,
-        temperature: float = 0.05,
-        bidirectional: bool = False,
-        chunk_size: int = 8,
-    ):
-        super(InfoNCEHardNegativeLossMemOpt, self).__init__()
-        self.temperature = temperature
-        self.loss = nn.CrossEntropyLoss()
-        self._bidirectional = bidirectional
-        self._chunk_size = chunk_size
-
-    def forward(self, embedding_anchor, embedding_pos, embedding_neg):
-        batch_size = embedding_anchor.shape[0]
-        embedding_targets = torch.cat([embedding_pos, embedding_neg])
-        loss = 0.0
-        for i in range(math.ceil(len(embedding_anchor) / self._chunk_size)):
-            labels = torch.arange(
-                start=i * self._chunk_size,
-                end=min((i + 1) * self._chunk_size, batch_size),
-                device=embedding_anchor.device,
-            )
-            scores = (
-                cos_sim(
-                    embedding_anchor[i * self._chunk_size: (i + 1) * self._chunk_size],
-                    embedding_targets,
-                )
-                / self.temperature
-            )
-            partial_loss = self.loss(scores, labels) * (len(labels) / batch_size)
-            if self._bidirectional:
-                scores = (
-                    cos_sim(
-                        embedding_pos[
-                            i * self._chunk_size: (i + 1) * self._chunk_size
-                        ],
-                        embedding_anchor,
-                    )
-                    / self.temperature
-                )
-                partial_loss += self.loss(scores, labels) * (len(labels) / batch_size)
-            loss += partial_loss
         return loss
 
     @property
