@@ -11,3 +11,4 @@ einops
 transformers
 py-cpuinfo
 deepspeed
+flash-attn
