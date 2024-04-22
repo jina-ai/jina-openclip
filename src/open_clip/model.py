@@ -314,7 +314,7 @@ def _build_vision_tower(
             hidden_drop=vision_cfg.hf_vision_hidden_states_drop,
             drop_path=vision_cfg.hf_vision_drop_path,
         )
-    if vision_cfg.eva_model_name:
+    elif vision_cfg.eva_model_name:
         vision_heads = vision_cfg.width // vision_cfg.head_width
         norm_layer = LayerNorm
 
