@@ -460,6 +460,7 @@ _PRETRAINED = {
         merged2b_s8b_b131k=_pcfg(
             hf_hub='timm/eva02_base_patch16_clip_224.merged2b_s8b_b131k/'
         ),
+        eva02=_pcfg(hf_hub='QuanSun/EVA-CLIP/EVA02_B_psz14to16.pt'),
     ),
     'EVA02-L-14': dict(
         # from QuanSun/EVA-CLIP/EVA02_CLIP_L_psz14_s4B.pt
