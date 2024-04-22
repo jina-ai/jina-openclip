@@ -16,7 +16,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .hf_model import HFTextEncoder
+from .eva_vit_model import EVAVisionTransformer
+from .hf_model import HFTextEncoder, HFVisionEncoder
 from .modified_resnet import ModifiedResNet
 from .pretrained import download_pretrained, get_pretrained_cfg
 from .timm_model import TimmModel
@@ -30,6 +31,12 @@ from .transformer import (
     text_global_pool,
 )
 from .utils import to_2tuple
+
+try:
+    from apex.normalization import FusedLayerNorm
+except:
+    FusedLayerNorm = LayerNorm
+    print("Please 'pip install apex'")
 
 
 @dataclass
@@ -61,21 +68,53 @@ class CLIPVisionCfg:
     pt_proj_exclude: bool = True
 
     # TIMM specific vision tower config
-    timm_model_name: Optional[
-        str
-    ] = None  # a valid model name overrides layers, width, patch_size
-    timm_model_pretrained: bool = (
-        False  # use (imagenet) pretrained weights for named model
+    # a valid model name overrides layers, width, patch_size
+    timm_model_name: Optional[str] = None
+    # use (imagenet) pretrained weights for named model
+    timm_model_pretrained: bool = False
+    # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
+    timm_pool: str = 'avg'
+    # linear projection for timm model output ('linear', 'mlp', '')
+    timm_proj: str = 'linear'
+    # enable bias final projection
+    timm_proj_bias: bool = False
+    # head dropout
+    timm_drop: float = 0.0
+    # backbone stochastic depth
+    timm_drop_path: Optional[float] = None
+
+    # hf specific vision tower config
+    # a valid model name overrides layers, width, patch_size
+    hf_vision_model_name: Optional[str] = None
+    # use (imagenet) pretrained weights for named model
+    hf_vision_model_pretrained: bool = False
+    # feature pooling for timm model ('tok', 'avg', '')
+    hf_vision_pool: str = 'avg'
+    # linear projection for hf vision encoder output ('linear', 'mlp', '')
+    hf_vision_proj: str = 'linear'
+    # enable bias final projection
+    hf_vision_proj_bias: bool = False
+    # vision model hidden states dropout
+    hf_vision_hidden_states_drop: float = 0.0
+    # vision model attention probabilities dropout
+    hf_vision_attn_drop: float = 0.0
+    # backbone stochastic depth
+    hf_vision_drop_path: Optional[float] = None
+
+    eva_model_name: str = (
+        None  # a valid eva model name overrides layers, width, patch_size
     )
-    timm_pool: str = (
-        'avg'  # feature pooling for timm model ('abs_attn', 'rot_attn', 'avg', '')
-    )
-    timm_proj: str = (
-        'linear'  # linear projection for timm model output ('linear', 'mlp', '')
-    )
-    timm_proj_bias: bool = False  # enable bias final projection
-    timm_drop: float = 0.0  # head dropout
-    timm_drop_path: Optional[float] = None  # backbone stochastic depth
+    eva_pretrained: str = None
+    qkv_bias: bool = True
+    fusedLN: bool = False
+    xattn: bool = False
+    postnorm: bool = False
+    rope: bool = False
+    pt_hw_seq_len: int = 16  # 224/14
+    intp_freq: bool = False
+    naiveswiglu: bool = False
+    subln: bool = False
+    drop_path_rate: Optional[float] = None  # drop path rate
 
 
 @dataclass
@@ -261,6 +300,72 @@ def _build_vision_tower(
             embed_dim=embed_dim,
             image_size=vision_cfg.image_size,
         )
+    elif vision_cfg.hf_vision_model_name:
+        visual = HFVisionEncoder(
+            vision_cfg.hf_vision_model_name,
+            output_dim=embed_dim,
+            proj_type=vision_cfg.hf_vision_proj,
+            proj_bias=vision_cfg.hf_vision_proj_bias,
+            pool_type=vision_cfg.hf_vision_pool,
+            pretrained=vision_cfg.hf_vision_model_pretrained,
+            output_tokens=vision_cfg.output_tokens,
+            image_size=vision_cfg.image_size,
+            attn_drop=vision_cfg.hf_vision_attn_drop,
+            hidden_drop=vision_cfg.hf_vision_hidden_states_drop,
+            drop_path=vision_cfg.hf_vision_drop_path,
+        )
+    elif vision_cfg.eva_model_name:
+        vision_heads = vision_cfg.width // vision_cfg.head_width
+        norm_layer = LayerNorm
+
+        visual = EVAVisionTransformer(
+            img_size=vision_cfg.image_size,
+            patch_size=vision_cfg.patch_size,
+            num_classes=embed_dim,
+            use_mean_pooling=False,  # False
+            init_values=vision_cfg.ls_init_value,
+            patch_dropout=vision_cfg.patch_dropout,
+            embed_dim=vision_cfg.width,
+            depth=vision_cfg.layers,
+            num_heads=vision_heads,
+            mlp_ratio=vision_cfg.mlp_ratio,
+            qkv_bias=vision_cfg.qkv_bias,
+            drop_path_rate=vision_cfg.drop_path_rate,
+            norm_layer=partial(FusedLayerNorm, eps=1e-6)
+            if vision_cfg.fusedLN
+            else partial(norm_layer, eps=1e-6),
+            xattn=vision_cfg.xattn,
+            rope=vision_cfg.rope,
+            postnorm=vision_cfg.postnorm,
+            pt_hw_seq_len=vision_cfg.pt_hw_seq_len,
+            intp_freq=vision_cfg.intp_freq,
+            naiveswiglu=vision_cfg.naiveswiglu,
+            subln=vision_cfg.subln,
+            proj_type=vision_cfg.proj_type,
+        )
+        _model_name = vision_cfg.eva_model_name
+        if _model_name is not None:
+            _tag = vision_cfg.eva_pretrained.replace(
+                '/', '-'
+            )  # for callers using old naming with / in ViT names
+            pretrained_image_cfg = get_pretrained_cfg(model=_model_name, tag=_tag)
+            if pretrained_image_cfg:
+                visual_checkpoint_path = download_pretrained(
+                    pretrained_image_cfg, cache_dir=cache_dir
+                )
+                state_dict = _load_state_dict(visual_checkpoint_path)
+                state_dict = {
+                    key: value for key, value in state_dict.items() if 'rope' not in key
+                }
+                visual.load_state_dict(state_dict, strict=False)
+            else:
+                _error_str = (
+                    f"No checkpoint for model '{_model_name}' found neither locally nor "
+                    f'remotely'
+                )
+                logging.exception(_error_str)
+                raise RuntimeError(_error_str)
+
     elif isinstance(vision_cfg.layers, (tuple, list)):
         vision_heads = vision_cfg.width * 32 // vision_cfg.head_width
         visual = ModifiedResNet(
@@ -347,6 +452,7 @@ def _build_text_tower(
             text_cfg.hf_model_name,
             output_dim=embed_dim,
             proj_type=text_cfg.proj_type,
+            proj_bias=text_cfg.proj_bias,
             pooler_type=text_cfg.hf_pooler_type,
             pretrained=text_cfg.hf_model_pretrained,
             output_tokens=text_cfg.output_tokens,

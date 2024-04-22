@@ -3,7 +3,7 @@
 Wraps HuggingFace transformers (https://github.com/huggingface/transformers) models for use as a text tower in CLIP model.
 """
 import re
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -28,6 +28,7 @@ except ImportError as e:
 
 
 from .hf_configs import arch_dict
+from .utils import to_2tuple
 
 
 # utils
@@ -117,6 +118,7 @@ class HFTextEncoder(nn.Module):
         config: PretrainedConfig = None,
         pooler_type: str = None,
         proj_type: str = None,
+        proj_bias: bool = False,
         pretrained: bool = True,
         output_tokens: bool = False,
         trust_remote_code: bool = False,
@@ -176,13 +178,13 @@ class HFTextEncoder(nn.Module):
         if (d_model == output_dim) and (proj_type is None):  # do we always need a proj?
             self.proj = nn.Identity()
         elif proj_type == 'linear':
-            self.proj = nn.Linear(d_model, output_dim, bias=False)
+            self.proj = nn.Linear(d_model, output_dim, bias=proj_bias)
         elif proj_type == 'mlp':
             hidden_size = (d_model + output_dim) // 2
             self.proj = nn.Sequential(
-                nn.Linear(d_model, hidden_size, bias=False),
+                nn.Linear(d_model, hidden_size, bias=proj_bias),
                 nn.GELU(),
-                nn.Linear(hidden_size, output_dim, bias=False),
+                nn.Linear(hidden_size, output_dim, bias=proj_bias),
             )
 
     def forward(self, x: TensorType):
@@ -231,6 +233,133 @@ class HFTextEncoder(nn.Module):
             for n, p in module.named_parameters():
                 p.requires_grad = (
                     (not freeze_layer_norm) if 'LayerNorm' in n.split('.') else False
+                )
+
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enable=True):
+        self.transformer.gradient_checkpointing_enable()
+
+    def init_parameters(self):
+        pass
+
+
+
+class HFVisionEncoder(nn.Module):
+    """HuggingFace model adapter"""
+
+    output_tokens: torch.jit.Final[bool]
+
+    def __init__(
+        self,
+        model_name_or_path: str,
+        image_size: int,
+        output_dim: int,
+        config: PretrainedConfig = None,
+        pool_type: str = 'tok',
+        proj_type: Optional[str] = None,
+        proj_bias: bool = False,
+        attn_drop: float = 0.0,
+        hidden_drop: float = 0.0,
+        drop_path: Optional[float] = None,
+        pretrained: bool = True,
+        output_tokens: bool = False,
+        trust_remote_code: bool = False,
+    ):
+        super().__init__()
+        self.output_tokens = output_tokens
+        self.output_dim = output_dim
+        self.image_size = to_2tuple(image_size)
+
+        if transformers is None:
+            raise RuntimeError(
+                'Please `pip install transformers` to use pre-trained HuggingFace models'
+            )
+        if config is None:
+            self.config = AutoConfig.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=trust_remote_code,
+                hidden_dropout_prob=hidden_drop,
+                attention_probs_dropout_prob=attn_drop,
+                drop_path_rate=drop_path,
+            )
+            create_func, model_args = (
+                (AutoModel.from_pretrained, model_name_or_path)
+                if pretrained
+                else (AutoModel.from_config, self.config)
+            )
+            self.transformer = create_func(
+                model_args,
+                trust_remote_code=trust_remote_code,
+                hidden_dropout_prob=hidden_drop,
+                attention_probs_dropout_prob=attn_drop,
+            )
+        else:
+            self.config = config
+            self.transformer = AutoModel.from_config(config)
+        
+        if "dinov2" in model_name_or_path:
+            self.transformer.embeddings.mask_token.requires_grad = False
+        assert pool_type in ('tok', 'avg', 'none')
+        self.pool_type = pool_type
+
+        d_model = self.config.hidden_size
+        if (d_model == output_dim) and (proj_type is None):  # do we always need a proj?
+            self.proj = nn.Identity()
+        elif proj_type == 'linear':
+            self.proj = nn.Linear(d_model, output_dim, bias=proj_bias)
+        elif proj_type == 'mlp':
+            hidden_size = (d_model + output_dim) // 2
+            self.proj = nn.Sequential(
+                nn.Linear(d_model, hidden_size, bias=proj_bias),
+                nn.GELU(),
+                nn.Linear(hidden_size, output_dim, bias=proj_bias),
+            )
+
+    def _global_pool(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.pool_type == 'avg':
+            pooled, tokens = x[:, 1:].mean(dim=1), x[:, 1:]
+        elif self.pool_type == 'tok':
+            pooled, tokens = x[:, 0], x[:, 1:]
+        else:
+            pooled = tokens = x
+
+        return pooled, tokens
+
+    def forward(self, x: TensorType):
+        x = self.transformer(x)[0] #returns a tuple of (final hidden states, token pooled outputs)
+        pooled, tokens = self._global_pool(x)
+        projected = self.proj(pooled)
+
+        return projected
+
+    def lock(self, unlocked_layers: int = 0, freeze_bn_stats: bool = True):
+        if not unlocked_layers:  # full freezing
+            for n, p in self.transformer.named_parameters():
+                p.requires_grad = (
+                    (not freeze_bn_stats) if 'LayerNorm' in n.split('.') else False
+                )
+            return
+        
+        #TODO: make it work if unlocked_layers !=0 
+        encoder = (
+            self.transformer.encoder
+            if hasattr(self.transformer, 'encoder')
+            else self.transformer
+        )
+        layer_list = getattr(
+            encoder, arch_dict[self.config.model_type]['config_names']['layer_attr']
+        )
+        print(f'Unlocking {unlocked_layers}/{len(layer_list) + 1} layers of hf model')
+        embeddings = getattr(
+            self.transformer,
+            arch_dict[self.config.model_type]['config_names']['token_embeddings_attr'],
+        )
+        modules = [embeddings, *layer_list][:-unlocked_layers]
+        # freeze layers
+        for module in modules:
+            for n, p in module.named_parameters():
+                p.requires_grad = (
+                    (not freeze_bn_stats) if 'LayerNorm' in n.split('.') else False
                 )
 
     @torch.jit.ignore
