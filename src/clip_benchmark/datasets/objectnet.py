@@ -7,11 +7,7 @@ import json
 import os
 from pathlib import Path
 
-import numpy as np
-import PIL
-import torch
 from torchvision import datasets
-from torchvision.transforms import Compose
 
 
 def get_metadata(folder):
@@ -31,7 +27,6 @@ def get_metadata(folder):
         imagenet_map = {v.strip(): str(pytorch_map[i]) for i, v in enumerate(f)}
 
     folder_to_ids, class_sublist = {}, []
-    classnames = []
     for objectnet_name, imagenet_names in objectnet_map.items():
         imagenet_names = imagenet_names.split('; ')
         imagenet_ids = [

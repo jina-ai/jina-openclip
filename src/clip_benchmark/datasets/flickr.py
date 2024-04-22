@@ -2,11 +2,9 @@
 Adapted from https://github.com/pytorch/vision/blob/main/torchvision/datasets/flickr.py
 Thanks to the authors of torchvision
 """
-import glob
 import os
 from collections import defaultdict
-from html.parser import HTMLParser
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from PIL import Image
 from torchvision.datasets import VisionDataset

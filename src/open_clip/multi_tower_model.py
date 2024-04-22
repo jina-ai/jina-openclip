@@ -77,7 +77,7 @@ class ThreeTowersCustomTextCLIP(CustomTextCLIP):
 
     def _tie_projections(self):
         if self.teacher_type == 'text':
-            assert type(self.teacher) is type(self.text), (
+            assert isinstance(self.teacher, type(self.text)), (
                 'Unable to tie the projections layers, '
                 f'teacher model is of type `{type(self.teacher)}` while text '
                 f'model is of type `{type(self.text)}`'
@@ -103,7 +103,7 @@ class ThreeTowersCustomTextCLIP(CustomTextCLIP):
                     f'compatible with the 3towers architecture!'
                 )
         else:
-            assert type(self.teacher) is type(self.visual), (
+            assert isinstance(self.teacher, type(self.visual)), (
                 'Unable to tie the projections layers, '
                 f'teacher model is of type `{type(self.teacher)}` while vision '
                 f'model is of type `{type(self.visual)}`'

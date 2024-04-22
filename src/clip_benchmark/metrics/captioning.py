@@ -55,7 +55,7 @@ class COCOEvalCap:
         for scorer, method in scorers:
             print('computing %s score...' % (scorer.method()))
             score, scores = scorer.compute_score(gts, res)
-            if type(method) is list:
+            if isinstance(method, list):
                 for sc, scs, m in zip(score, scores, method):
                     self.set_eval(sc, m)
                     self.set_img_to_eval_imgs(scs, gts.keys(), m)

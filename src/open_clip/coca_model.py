@@ -27,7 +27,7 @@ try:
         'beam_search': 'beam_search',
     }
     _has_transformers = True
-except ImportError as e:
+except ImportError as _:
     GENERATION_TYPES = {'top_k': None, 'top_p': None, 'beam_search': 'beam_search'}
     _has_transformers = False
 

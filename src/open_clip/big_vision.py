@@ -105,7 +105,7 @@ def load_big_vision_weights(model: CustomTextCLIP, checkpoint_path: str):
 
         if module.attn_pool is not None:
             block_prefix = f'{prefix}MAPHead_0/'
-            mha_prefix = block_prefix + f'MultiHeadDotProductAttention_0/'
+            mha_prefix = block_prefix + 'MultiHeadDotProductAttention_0/'
             module.attn_pool.latent.copy_(_n2p(w[f'{block_prefix}probe'], t=False))
             module.attn_pool.q.weight.copy_(
                 _n2p(w[f'{mha_prefix}query/kernel'], t=False).flatten(1).T
@@ -148,7 +148,7 @@ def load_big_vision_weights(model: CustomTextCLIP, checkpoint_path: str):
     def _convert_openclip_transformer(module: Transformer, prefix):
         for i, block in enumerate(module.resblocks.children()):
             block_prefix = f'{prefix}encoderblock_{i}/'
-            mha_prefix = block_prefix + f'MultiHeadDotProductAttention_0/'
+            mha_prefix = block_prefix + 'MultiHeadDotProductAttention_0/'
             block.ln_1.weight.copy_(_n2p(w[f'{block_prefix}LayerNorm_0/scale']))
             block.ln_1.bias.copy_(_n2p(w[f'{block_prefix}LayerNorm_0/bias']))
             block.attn.in_proj_weight.copy_(

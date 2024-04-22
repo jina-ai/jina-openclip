@@ -1,6 +1,6 @@
 from functools import partial
 from itertools import islice
-from typing import Callable, List, Optional, Sequence, Union
+from typing import Callable, Optional, Sequence, Union
 
 import torch
 import torch.nn.functional as F

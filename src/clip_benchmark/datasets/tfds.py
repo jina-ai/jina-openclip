@@ -4,7 +4,6 @@ from PIL import Image
 
 def download_tfds_dataset(name, data_dir=None):
     import tensorflow_datasets as tfds
-    import timm
 
     builder = tfds.builder(name, data_dir=data_dir)
     builder.download_and_prepare()
@@ -50,7 +49,6 @@ class VTABIterableDataset(torch.utils.data.IterableDataset):
             iterator = iterator.shard(
                 index=worker_info.id, num_shards=worker_info.num_workers
             )
-        nb = 0
         for data in iterator:
             inputs = data[self.input_name].numpy()
             labels = data[self.label_name].numpy()
