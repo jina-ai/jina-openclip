@@ -1,6 +1,8 @@
 import logging
 import math
 import time
+import warnings
+from collections import defaultdict
 from itertools import islice
 
 import torch
@@ -65,64 +67,6 @@ def backward(total_loss, model, scaler=None, deepspeed=False):
         total_loss.backward()
 
 
-def get_global_batch_grads(
-    embedding_batches: list[torch.Tensor],
-    loss_fn: nn.Module,
-    args,
-) -> tuple[list[torch.Tensor], torch.Tensor]:
-    """
-    Gather embeddings from all devices and compute gradients w.r.t. global batch.
-
-    This function will gather the embeddings from all devices and evaluate `loss_fn` on
-    *all* embeddings jointly. Then, we backpropagate the loss onto the gathered
-    embeddings and return the gradients belonging to the embeddings of the local
-    device. This only works for loss functions not requiring "labels". I.e., this won't
-    work for distillation losses, hard negative losses with ragged input, etc.
-
-    :param embedding_batches: List of embedding tensors,
-        e.g. [left_embeddings, right_embeddings]
-    :param loss_fn: Module that would accept `*embedding_batches`
-    :param args: Arguments
-    :return: Tuple of loss and its gradient
-        The `loss_fn` is differentiated w.r.t. the tensors in `embedding_batches`
-        after computing the loss over embeddings gathered from all devices.
-    """
-    gather = GatherFeatures(
-        local_loss=args.local_loss,
-        gather_with_grad=args.gather_with_grad,
-        rank=args.rank,
-        world_size=args.world_size,
-    )
-    global_embedding_batches = [gather(b) for b in embedding_batches]
-    # flatten the device dimension
-    global_embedding_batches = [
-        b.reshape((-1, *b.shape[2:])).requires_grad_() for b in global_embedding_batches
-    ]
-    loss = loss_fn(*global_embedding_batches)
-    loss.backward()
-    # only take the gradients that belong to embeddings from this device
-    grads = [
-        b.grad.reshape((args.world_size, -1, *b.shape[1:]))[args.rank]
-        for b in global_embedding_batches
-    ]
-    return grads, loss
-
-
-def get_surrogate_loss(
-    embeddings: list[torch.Tensor], gradients: list[torch.Tensor],
-):
-    """
-    Perform backward pass given embeddings and corresponding gradients.
-
-    :param embeddings: A list of embeddings, e.g. `[left, right]`
-    :param gradients: Gradients of a loss functions w.r.t. `embeddings`
-    :return:
-    """
-    flat_embeddings = torch.cat([o.flatten() for o in embeddings])
-    flat_grads = torch.cat([g.flatten() for g in gradients])
-    return torch.dot(flat_embeddings, flat_grads)
-
-
 class DummyEmbeddingsDataloader:
 
     def __iter__(self):
@@ -168,20 +112,24 @@ def train_one_epoch(
 
     accum_images, accum_texts, accum_features = [], [], {}
     accum_emb_datasets, accum_emb_batches, accum_emb_labels, accum_embeddings = (
-        [], [], {}, {}
+        [], [], [], []
     )
 
     losses_m = {}
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
-    end = time.time()
-    embeddings_gather = GatherFeatures(
-        local_loss=False,
-        gather_with_grad=args.gather_with_grad,
-        rank=args.rank,
-        world_size=args.world_size,
-    ) if args.emb_global_batch else None
+    embeddings_gather = None
+    if args.emb_global_batch:
+        embeddings_gather = GatherFeatures(
+            local_loss=False,
+            gather_with_grad=args.gather_with_grad,
+            rank=args.rank,
+            world_size=args.world_size,
+        )
 
+    start = time.time()
+
+    # training loop
     for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels))) in enumerate(zip(
         dataloader, islice(emb_dataloader, 1, None)
     )):
@@ -201,7 +149,7 @@ def train_one_epoch(
         if emb_labels:
             emb_labels[0] = [label.to(device=device) for label in emb_labels[0]]
 
-        data_time_m.update(time.time() - end)
+        data_time_m.update(time.time() - start)
 
         if args.deepspeed:
             model.zero_grad()
@@ -215,15 +163,15 @@ def train_one_epoch(
 
             with autocast():
 
-                model_out = model(images, texts)
-                logit_scale = model_out['logit_scale']
+                modelout = model(images, texts)
+                logit_scale = modelout['logit_scale']
                 if args.distill:
                     with torch.no_grad():
                         dist_model_out = dist_model(images, texts)
-                    model_out.update(
+                    modelout.update(
                         {f'dist_{k}': v for k, v in dist_model_out.items()}
                     )
-                losses = loss(**model_out, output_dict=True)
+                losses = loss(**modelout, output_dict=True)
 
                 if args.mtl:
                     emb_loss_fn = (
@@ -263,40 +211,34 @@ def train_one_epoch(
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
                 with autocast():
-                    model_out = model(images, texts)
+                    modelout = model(images, texts)
 
                     for f in ('logit_scale', 'logit_bias'):
-                        model_out.pop(f, None)
+                        modelout.pop(f, None)
 
-                    for key, val in model_out.items():
+                    for key, val in modelout.items():
                         if key in accum_features:
                             accum_features[key].append(val)
                         else:
                             accum_features[key] = [val]
 
                     if args.mtl:
-                        embeddings = [
-                            model.module.encode_text(
-                                embedding['input_ids'], normalize=True
-                            )
-                            if isinstance(model, nn.parallel.DistributedDataParallel)
-                            else model.encode_text(
-                                embedding['input_ids'], normalize=True
-                            )
-                            for embedding in emb_batch
-                        ]
-
-                        for j, embedding in enumerate(embeddings):
-                            if j in accum_embeddings:
-                                accum_embeddings[j].append(embedding)
-                            else:
-                                accum_embeddings[j] = [embedding]
-
-                        for j, label in enumerate(emb_labels):
-                            if j in accum_emb_labels:
-                                accum_emb_labels[j].append(label)
-                            else:
-                                accum_emb_labels[j] = [label]
+                        # if we have no labels == pair training
+                        if len(emb_labels) == 0:
+                            embeddings = [
+                                model.module.encode_text(
+                                    embedding['input_ids'], normalize=True
+                                )
+                                if isinstance(model, nn.parallel.DistributedDataParallel)
+                                else model.encode_text(
+                                    embedding['input_ids'], normalize=True
+                                )
+                                for embedding in emb_batch
+                            ]
+                            accum_embeddings.append(embeddings)
+                        # else == triplet training
+                        else:
+                            accum_emb_labels.append(emb_labels)
 
                 accum_images.append(images)
                 accum_texts.append(texts)
@@ -309,6 +251,22 @@ def train_one_epoch(
                 # FIXME this makes data time logging unreliable when accumulating
                 continue
 
+            if len(accum_emb_labels) not in {0, args.accum_freq}:
+                warnings.warn(
+                    f'Out of {args.accum_freq} gradient accumulation steps, '
+                    f'{len(accum_emb_labels)} contain labels and '
+                    f'{len(accum_embeddings)} are aligned pairs. '
+                    f'Gradient accumulation cannot work with inconsistent data'
+                )
+                accum_images, accum_texts, accum_features = [], [], {}
+                (
+                    accum_emb_datasets,
+                    accum_emb_batches,
+                    accum_emb_labels,
+                    accum_embeddings
+                ) = [], [], [], []
+                continue
+
             # Now, ready to take gradients for the last accum_freq batches.
             # Re-do the forward pass for those batches, and use the cached features
             # from the other batches as negatives.
@@ -319,31 +277,35 @@ def train_one_epoch(
             else:
                 optimizer.zero_grad()
 
+            losses = defaultdict(lambda: torch.zeros(1, device=device))
+
             for k in range(args.accum_freq):
-                images = accum_images[k]
-                texts = accum_texts[k]
                 with autocast():
-                    model_out = model(images, texts)
+
+                    images = accum_images[k]
+                    texts = accum_texts[k]
+
+                    modelout = model(images, texts)
 
                     inputs_no_accum = {}
-                    inputs_no_accum['logit_scale'] = logit_scale = model_out.pop(
+                    inputs_no_accum['logit_scale'] = logit_scale = modelout.pop(
                         'logit_scale'
                     )
-                    if 'logit_bias' in model_out:
-                        inputs_no_accum['logit_bias'] = model_out.pop('logit_bias')
+                    if 'logit_bias' in modelout:
+                        inputs_no_accum['logit_bias'] = modelout.pop('logit_bias')
 
                     inputs = {}
                     for key, val in accum_features.items():
                         accumulated = accum_features[key]
                         inputs[key] = torch.cat(
-                            accumulated[:k] + [model_out[key]] + accumulated[k+1:]
+                            accumulated[:k] + [modelout[key]] + accumulated[k+1:]
                         )
 
-                    losses = loss(**inputs, **inputs_no_accum, output_dict=True)
+                    _losses = loss(**inputs, **inputs_no_accum, output_dict=True)
                     del inputs
                     del inputs_no_accum
-                    contrastive_loss = sum(losses.values())
-                    losses['contrastive_loss'] = contrastive_loss
+                    contrastive_loss = sum(_losses.values())
+                    losses['contrastive_loss'] += contrastive_loss
                     total_loss = contrastive_loss
 
                     if args.mtl:
@@ -364,32 +326,48 @@ def train_one_epoch(
                             for embedding in emb_batch
                         ]
 
-                        inputs = []
-                        for idx, value in accum_embeddings.items():
-                            inputs.append(
-                                torch.cat(value[:k] + [embeddings[idx]] + value[k+1:])
-                            )
-                        emb_labels = []
-                        for idx, value in accum_emb_labels.items():
-                            emb_labels.append(torch.cat(value))
-
-                        if args.emb_global_batch:
-                            assert len(emb_labels) == 0, (
-                                'Global batch cannot be used in conjunction with labeled '
-                                'data'
-                            )
-                            all_inputs = [
-                                embeddings_gather(emb) for emb in inputs
-                            ]
-                            embedding_loss = emb_loss_fn(*all_inputs)
+                        if len(accum_emb_labels) == 0:
+                            inputs = []
+                            _cached_embeddings = list(zip(*accum_embeddings))
+                            for idx, _cached_embedding in enumerate(_cached_embeddings):
+                                inputs.append(
+                                    torch.cat(
+                                        _cached_embedding[:k] +
+                                        (embeddings[idx],) +
+                                        _cached_embedding[k+1:]
+                                    )
+                                )
+                            if args.emb_global_batch:
+                                assert len(emb_labels) == 0, (
+                                    'Global batch cannot be used in conjunction with '
+                                    'labeled data'
+                                )
+                                all_inputs = [
+                                    embeddings_gather(emb) for emb in inputs
+                                ]
+                                embedding_loss = emb_loss_fn(*all_inputs)
+                            else:
+                                embedding_loss = emb_loss_fn(*inputs)
+                            del inputs
                         else:
-                            embedding_loss = emb_loss_fn(*inputs, *emb_labels)
+                            if args.emb_global_batch:
+                                raise ValueError(
+                                    'Global batch cannot be used in conjunction with '
+                                    'labeled data'
+                                )
+                            emb_labels = accum_emb_labels[k]
+                            embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
 
-                        del inputs
-                        losses['embedding_loss'] = embedding_loss
-                        total_loss += args.emb_loss_weight * embedding_loss
+                        embedding_loss = args.emb_loss_weight * embedding_loss
+                        losses['embedding_loss'] += embedding_loss
+                        total_loss += embedding_loss
 
+                losses['loss'] += total_loss
                 backward(total_loss, model, scaler=scaler, deepspeed=args.deepspeed)
+
+            losses['contrastive_loss'] = losses['contrastive_loss'] / args.accum_freq
+            losses['embedding_loss'] = losses['embedding_loss'] / args.accum_freq
+            losses['loss'] = losses['loss'] / args.accum_freq
 
         if scaler is not None:
             if args.horovod:
@@ -426,14 +404,14 @@ def train_one_epoch(
                 accum_emb_batches,
                 accum_emb_labels,
                 accum_embeddings
-            ) = [], [], {}, {}
+            ) = [], [], [], []
 
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.
         with torch.no_grad():
             unwrap_model(model).logit_scale.clamp_(0, math.log(100))
 
-        batch_time_m.update(time.time() - end)
-        end = time.time()
+        batch_time_m.update(time.time() - start)
+        start = time.time()
         batch_count = i_accum + 1
 
         if is_master(args) and (
@@ -452,9 +430,10 @@ def train_one_epoch(
                 losses_m[key].update(val.item(), batch_size)
 
             logit_scale_scalar = logit_scale.item()
-            loss_log = ' '.join(
+            loss_log = ' - '.join(
                 [
-                    f'{loss_name.capitalize()}: {loss_m.val:#.5g} ({loss_m.avg:#.5g})'
+                    f'{loss_name.replace("_", " ")}: '
+                    f'{loss_m.val:#.5g} (avg {loss_m.avg:#.5g})'
                     for loss_name, loss_m in losses_m.items()
                 ]
             )
@@ -465,13 +444,15 @@ def train_one_epoch(
                 args.accum_freq * args.batch_size / batch_time_m.val
             )
             logging.info(
-                f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/"
-                f"{samples_per_epoch} ({percent_complete:.0f}%)] "
-                f"Data (t): {data_time_m.avg:.3f} "
-                f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, "
-                f"{samples_per_second_per_gpu:#g}/s/gpu "
-                f"LR: {optimizer.param_groups[-1]['lr']:5f} "
-                f"Logit Scale: {logit_scale_scalar:.3f} " + loss_log
+                f'Epoch: {epoch} [{num_samples:>{sample_digits}}/'
+                f'{samples_per_epoch} ({percent_complete:.0f}%)] - '
+                f'Data Time: {data_time_m.avg:.3f}s - '
+                f'Batch Time: {batch_time_m.avg:.3f}s - '
+                f'Samples per Second: {samples_per_second:#g}/s, '
+                f'{samples_per_second_per_gpu:#g}/s/gpu - '
+                f'Last Layer LR: {optimizer.param_groups[-1]["lr"]:5f} - '
+                f'Logit Scale: {logit_scale_scalar:.3f} - '
+                f'LOSS | {loss_log}'
             )
 
             # Save train loss / etc. Using non avg meter values as loggers have

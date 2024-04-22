@@ -7,7 +7,7 @@ from torch.utils.flop_counter import FlopCounterMode
 
 try:
     import fvcore
-except:
+except ImportError or ModuleNotFoundError:
     fvcore = None
 
 parser = argparse.ArgumentParser(description='OpenCLIP Profiler')
@@ -250,7 +250,7 @@ def profile_model(model_name, batch_size=1, profiler='torch'):
                 results['image_gflops'] = round(image_flops / 1e9, 2)
                 results['text_gflops'] = round(text_flops / 1e9, 2)
 
-        except RuntimeError as e:
+        except RuntimeError as _:
             pass
     return results
 

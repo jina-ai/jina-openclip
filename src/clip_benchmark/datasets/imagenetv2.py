@@ -8,7 +8,7 @@ import tarfile
 
 import requests
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torchvision.datasets import ImageFolder
 from tqdm import tqdm
 
@@ -39,7 +39,7 @@ class ImageNetValDataset(Dataset):
         self.transform = transform
         if not self.dataset_root.exists() or len(self.fnames) != VAL_DATASET_SIZE:
             if not self.tar_root.exists():
-                print(f'Dataset imagenet-val not found on disk, downloading....')
+                print('Dataset imagenet-val not found on disk, downloading....')
                 response = requests.get(URLS['val'], stream=True)
                 total_size_in_bytes = int(response.headers.get('content-length', 0))
                 block_size = 1024  # 1 Kibibyte
@@ -52,7 +52,7 @@ class ImageNetValDataset(Dataset):
                         f.write(data)
                 progress_bar.close()
                 if total_size_in_bytes != 0 and progress_bar.n != total_size_in_bytes:
-                    assert False, f'Downloading from {URLS[variant]} failed'
+                    assert False, f'Downloading from {URLS["variant"]} failed'
             print('Extracting....')
             tarfile.open(self.tar_root).extractall(f'{location}')
             shutil.move(f"{location}/{FNAMES['val']}", self.dataset_root)

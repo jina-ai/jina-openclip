@@ -11,16 +11,16 @@ import torch.nn.functional as F
 
 try:
     from timm.models.layers import drop_path, to_2tuple, trunc_normal_
-except:
+except ImportError or ModuleNotFoundError:
     from timm.layers import drop_path, to_2tuple, trunc_normal_
 
-from .rope import VisionRotaryEmbedding, VisionRotaryEmbeddingFast
+from .rope import VisionRotaryEmbeddingFast
 from .transformer import PatchDropout
 
 if os.getenv('ENV_TYPE') == 'deepspeed':
     try:
         from deepspeed.runtime.activation_checkpointing.checkpointing import checkpoint
-    except:
+    except ImportError or ModuleNotFoundError:
         from torch.utils.checkpoint import checkpoint
 else:
     from torch.utils.checkpoint import checkpoint

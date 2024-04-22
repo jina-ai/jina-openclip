@@ -11,13 +11,13 @@ from torch import TensorType
 
 try:
     import transformers
-    from transformers import AutoConfig, AutoModel, AutoTokenizer, PretrainedConfig
+    from transformers import AutoConfig, AutoModel, PretrainedConfig
     from transformers.modeling_outputs import (
         BaseModelOutput,
         BaseModelOutputWithPooling,
         BaseModelOutputWithPoolingAndCrossAttentions,
     )
-except ImportError as e:
+except ImportError as _:
     transformers = None
 
     class BaseModelOutput:

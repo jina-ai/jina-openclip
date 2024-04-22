@@ -1,5 +1,3 @@
-import warnings
-
 from torch import nn, optim
 
 

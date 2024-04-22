@@ -20,7 +20,7 @@ def remote_sync_s3(local_dir, remote_dir):
         )
         return False
 
-    logging.info(f'Successfully synced with S3 bucket')
+    logging.info('Successfully synced with S3 bucket')
     return True
 
 
@@ -77,7 +77,7 @@ def start_sync_process(sync_every, local_dir, remote_dir, protocol):
 # Note: we are not currently using this save function.
 def pt_save(pt_obj, file_path):
     of = fsspec.open(file_path, 'wb')
-    with of as f:
+    with of as _:
         torch.save(pt_obj, file_path)
 
 

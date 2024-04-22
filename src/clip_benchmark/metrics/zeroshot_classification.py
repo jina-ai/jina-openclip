@@ -36,10 +36,10 @@ def _zero_shot_classifier(model, tokenizer, classnames, templates, device, amp=T
     with torch.no_grad(), autocast():
         zeroshot_weights = []
         for classname in tqdm(classnames):
-            if type(templates) is dict:
+            if isinstance(templates, dict):
                 # class-specific prompts (e.g., CuPL https://arxiv.org/abs/2209.03320)
                 texts = templates[classname]
-            elif type(templates) is list:
+            elif isinstance(templates, list):
                 # generic prompts tht are specialized for each class by replacing {c}
                 # with the class name
                 texts = [template.format(c=classname) for template in templates]

@@ -674,7 +674,7 @@ def main(args):
                     os.path.join(args.checkpoint_path, ckpt_dir), exist_ok=False
                 )
                 model_ckpt_path = os.path.join(
-                    args.checkpoint_path, ckpt_dir, f'state.pt'
+                    args.checkpoint_path, ckpt_dir, 'state.pt'
                 )
                 torch.save(checkpoint_dict, model_ckpt_path)
                 if emb_dataset is not None:

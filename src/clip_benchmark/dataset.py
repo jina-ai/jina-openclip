@@ -1303,7 +1303,7 @@ def build_dataset(
                 'kaggle datasets download -d hsankesara/flickr-image-dataset',
                 shell=True,
             )
-            call(f'unzip flickr-image-dataset.zip', shell=True)
+            call('unzip flickr-image-dataset.zip', shell=True)
             call(
                 (
                     f'mv flickr30k_images/flickr30k_images {root} '
@@ -1368,7 +1368,7 @@ def build_dataset(
                 )
                 sys.exit(1)
             call('kaggle datasets download -d adityajn105/flickr8k', shell=True)
-            call(f'unzip flickr8k.zip', shell=True)
+            call('unzip flickr8k.zip', shell=True)
             call(f'mv Images {root}', shell=True)
             call(f'mv captions.txt {root}', shell=True)
         if not annotation_file:
