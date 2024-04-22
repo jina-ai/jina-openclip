@@ -6,6 +6,7 @@ from typing import Callable, Optional, Sequence, Tuple
 import torch
 from torch import nn
 from torch.nn import functional as F
+
 if os.getenv('ENV_TYPE') == 'deepspeed':
     from deepspeed.runtime.activation_checkpointing.checkpointing import checkpoint
 else:
@@ -88,7 +89,7 @@ class PatchDropout(nn.Module):
         if self.exclude_first_token:
             x = torch.cat((cls_tokens, x), dim=1)
 
-        return x
+        return x, patch_indices_keep
 
 
 class Attention(nn.Module):
@@ -590,7 +591,7 @@ class VisionTransformer(nn.Module):
         # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
 
-        x = self.patch_dropout(x)
+        x, _ = self.patch_dropout(x)
         x = self.ln_pre(x)
 
         x = x.permute(1, 0, 2)  # NLD -> LND
