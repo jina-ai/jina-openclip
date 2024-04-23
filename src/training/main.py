@@ -645,7 +645,7 @@ def main(args):
         # Saving checkpoints.
         # is_master(args) can not be here while using deepspped, otherwise ckpts
         # can not be saved
-        if args.logs and args.logs.lower() != 'none' and args.enable_deepspeed:
+        if args.logs and args.logs.lower() != 'none' and args.deepspeed:
             ds_checkpoint_path = os.path.join(args.logs, args.name, 'checkpoints')
             if completed_epoch == args.epochs or (
                 args.save_frequency > 0 and (completed_epoch % args.save_frequency) == 0
