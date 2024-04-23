@@ -401,23 +401,25 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     )
 
     metrics = {}
-    for task in args.mteb_tasks.split(','):
-        evaluation = MTEB(tasks=[task], task_langs=['en'])
-        results = evaluation.run(
-            _mteb_model,
-            batch_size=4,
-            output_folder=None,
-            eval_splits=['dev'] if task == 'MSMARCO' else ['test'],
-            ignore_identical_ids=False,
-        )
-        metrics.update(
-            {
-                k: v
-                for k, v in flatten(results, separator='-').items()
-                if isinstance(v, float)
-                and any(sub in k for sub in MTEB_LOGGING_METRICS)
-            }
-        )
+    autocast = get_autocast(args.precision)
+    with autocast():
+        for task in args.mteb_tasks.split(','):
+            evaluation = MTEB(tasks=[task], task_langs=['en'])
+            results = evaluation.run(
+                _mteb_model,
+                batch_size=16,
+                output_folder=None,
+                eval_splits=['dev'] if task == 'MSMARCO' else ['test'],
+                ignore_identical_ids=False,
+            )
+            metrics.update(
+                {
+                    k: v
+                    for k, v in flatten(results, separator='-').items()
+                    if isinstance(v, float)
+                    and any(sub in k for sub in MTEB_LOGGING_METRICS)
+                }
+            )
 
     logging.info('Finished MTEB benchmark!')
     logging.info('--------------------------------------------------------------------')

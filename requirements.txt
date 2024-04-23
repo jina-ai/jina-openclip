@@ -12,3 +12,4 @@ transformers
 py-cpuinfo
 deepspeed
 flash-attn
+xformers
