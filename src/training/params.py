@@ -689,6 +689,12 @@ def parse_args(args):
         help='The weighing factor for the embedding loss.',
     )
     parser.add_argument('--local_rank', type=int, default=0)
+    parser.add_argument(
+        '--longclip',
+        default=False,
+        action='store_true',
+        help='If set to true apply pca to image features and collect long & short loss',
+    )
 
     args = parser.parse_args(args)
 
