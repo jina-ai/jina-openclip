@@ -143,6 +143,11 @@ def train_one_epoch(
         images, texts = mm_batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
+        if args.longclip:
+            images_short = images.clone()
+            texts_short = []
+            for text in texts:
+                texts_short.append(text.split(". ")[0])
         if emb_batch:
             for batch in emb_batch:
                 batch.to(device=device)
@@ -200,6 +205,9 @@ def train_one_epoch(
 
                     losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
 
+                if args.longclip:
+                    modelout_short = model(images_short, texts_short)
+                    loss_short = loss(**modelout_short, output_dict=True, pca_dim=32)
             total_loss = sum(losses.values())
             losses['loss'] = total_loss
             backward(total_loss, model, scaler=scaler, deepspeed=args.deepspeed)
