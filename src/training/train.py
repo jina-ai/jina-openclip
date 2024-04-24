@@ -208,6 +208,7 @@ def train_one_epoch(
                 if args.longclip:
                     modelout_short = model(images_short, texts_short)
                     loss_short = loss(**modelout_short, output_dict=True, pca_dim=32)
+                    losses['short_loss'] = 0.1 * loss_short
             total_loss = sum(losses.values())
             losses['loss'] = total_loss
             backward(total_loss, model, scaler=scaler, deepspeed=args.deepspeed)

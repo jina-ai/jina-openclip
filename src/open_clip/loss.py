@@ -17,7 +17,7 @@ try:
 except ImportError:
     hvd = None
 
-from utils import PCA
+from .utils import PCA
 
 class GatherFeatures:
 
