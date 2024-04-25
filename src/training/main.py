@@ -31,6 +31,7 @@ from open_clip import (
     get_tokenizer,
     trace_model,
 )
+from open_clip.tokenizer import DEFAULT_CONTEXT_LENGTH
 
 from training.data import MultiS3EmbeddingDataset, dynamic_collate, get_multimodal_data
 from training.distributed import broadcast_object, init_distributed_device, is_master
@@ -81,8 +82,6 @@ def get_latest_checkpoint(path: str, remote: bool):
 
 
 def create_embeddings_dataloader(args):
-    # emb_tokenizer_name,
-    # emb_tokenizer_max_length
 
     import training.embloss as embeddings_loss_module
 
@@ -161,7 +160,11 @@ def create_embeddings_dataloader(args):
             tokenizer_options={
                 'padding': 'max_length',
                 'truncation': True,
-                'max_length': args.emb_tokenizer_max_length,
+                'max_length': (
+                    args.emb_max_sequence_length
+                    or args.max_sequence_length
+                    or DEFAULT_CONTEXT_LENGTH
+                ),
                 'return_tensors': 'pt',
             },
             input_type_dict=input_type_dict,
@@ -515,7 +518,7 @@ def main(args):
 
     # initialize datasets
     # multimodal
-    tokenizer = get_tokenizer(args.model)
+    tokenizer = get_tokenizer(args.model, context_length=args.max_sequence_length)
     data = get_multimodal_data(
         args,
         (preprocess_train, preprocess_val),
