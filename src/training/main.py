@@ -518,7 +518,11 @@ def main(args):
 
     # initialize datasets
     # multimodal
-    tokenizer = get_tokenizer(args.model, context_length=args.max_sequence_length)
+    tokenizer = get_tokenizer(
+        args.model,
+        context_length=args.max_sequence_length,
+        permute_start_positions=True,
+    )
     data = get_multimodal_data(
         args,
         (preprocess_train, preprocess_val),

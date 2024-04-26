@@ -15,6 +15,7 @@ import ftfy
 import numpy as np
 import regex as re
 import torch
+from torch.nn import functional as f
 
 # https://stackoverflow.com/q/62691279
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -432,6 +433,7 @@ class HFTokenizer:
         context_length: Optional[int] = DEFAULT_CONTEXT_LENGTH,
         clean: str = 'whitespace',
         strip_sep_token: bool = False,
+        permute_start_positions: bool = False,
         language: Optional[str] = None,
     ):
         from transformers import AutoTokenizer
@@ -445,6 +447,8 @@ class HFTokenizer:
         self.context_length = context_length
         self.clean_fn = get_clean_fn(clean)
         self.strip_sep_token = strip_sep_token
+        self.permute_start_positions = permute_start_positions
+        self.padding = 'longest' if self.permute_start_positions else 'max_length'
 
     def save_pretrained(self, dest):
         self.tokenizer.save_pretrained(dest)
@@ -463,22 +467,32 @@ class HFTokenizer:
         ), 'Please set a valid context length in class init or call.'
 
         texts = [self.clean_fn(text) for text in texts]
-        input_ids = self.tokenizer.batch_encode_plus(
+        inputids = self.tokenizer.batch_encode_plus(
             texts,
             return_tensors='pt',
             max_length=context_length,
-            padding='max_length',
+            padding=self.padding,
             truncation=True,
         ).input_ids
 
         if self.strip_sep_token:
-            input_ids = torch.where(
-                input_ids == self.tokenizer.sep_token_id,
-                torch.zeros_like(input_ids),
-                input_ids,
+            inputids = torch.where(
+                inputids == self.tokenizer.sep_token_id,
+                torch.zeros_like(inputids),
+                inputids,
             )
 
-        return input_ids
+        if self.permute_start_positions:
+            bs, maxlen = inputids.size()
+            suffixes = torch.randint(0, context_length - maxlen, (bs,)).tolist()
+            inputids = torch.stack(
+                [
+                    f.pad(inputids[i], (suffix, context_length - suffix - maxlen))
+                    for i, suffix in enumerate(suffixes)
+                ]
+            )
+
+        return inputids
 
     def set_language(self, src_lang):
         if hasattr(self, 'set_lang_fn'):
