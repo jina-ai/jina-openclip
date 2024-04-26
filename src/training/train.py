@@ -89,6 +89,7 @@ def train_one_epoch(
     emb_dataloader=None,
     emb_losses=None,
     tb_writer=None,
+    long_clip_dataloader=None,
 ):
     device = torch.device(args.device)
     autocast = get_autocast(args.precision)
@@ -103,7 +104,10 @@ def train_one_epoch(
         assert emb_losses is not None
     else:
         emb_dataloader = DummyEmbeddingsDataloader()
-
+    
+    if args.longclip:
+        assert long_clip_dataloader is not None
+        
     # set epoch in process safe manner via sampler or shared_epoch
     data['train'].set_epoch(epoch)
     dataloader = data['train'].dataloader
@@ -130,8 +134,8 @@ def train_one_epoch(
     start = time.time()
 
     # training loop
-    for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels))) in enumerate(zip(
-        dataloader, islice(emb_dataloader, 1, None)
+    for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels)), long_clip_batch) in enumerate(zip(
+        dataloader, islice(emb_dataloader, 1, None), long_clip_dataloader
     )):
 
         i_accum = i // args.accum_freq
@@ -140,14 +144,15 @@ def train_one_epoch(
         if not args.skip_scheduler:
             scheduler(step)
 
-        images, texts = mm_batch
+        images, texts, = mm_batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
         if args.longclip:
+            images, texts, texts_short = long_clip_batch
+            images = images.to(device=device, dtype=input_dtype, non_blocking=True)
             images_short = images.clone()
-            texts_short = []
-            for text in texts:
-                texts_short.append(text.split(". ")[0])
+            texts = texts.to(device=device, non_blocking=True)
+            texts_short = texts_short.to(device=device, non_blocking=True)
         if emb_batch:
             for batch in emb_batch:
                 batch.to(device=device)
@@ -208,7 +213,7 @@ def train_one_epoch(
                 if args.longclip:
                     modelout_short = model(images_short, texts_short)
                     loss_short = loss(**modelout_short, output_dict=True, pca_dim=32)
-                    losses['short_loss'] = 0.1 * loss_short
+                    losses['short_loss'] = 0.1 * loss_short['contrastive_loss']
             total_loss = sum(losses.values())
             losses['loss'] = total_loss
             backward(total_loss, model, scaler=scaler, deepspeed=args.deepspeed)

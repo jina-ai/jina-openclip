@@ -9,10 +9,11 @@ import subprocess
 import sys
 from datetime import datetime
 from functools import partial
+from torch.utils.data.distributed import DistributedSampler
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader,RandomSampler
 from transformers import AutoTokenizer
 
 try:
@@ -453,12 +454,13 @@ def main(args):
     # create optimizer and scaler
     optimizer = None
     scaler = None
-
+    '''
     if args.train_data or args.dataset_type == 'synthetic':
         assert not args.trace, 'Cannot train with traced model'
         model, optimizer, scaler = create_optimizer(
             args=args, model=model, dsinit=dsinit
         )
+        '''
 
     # optionally resume from a checkpoint
     start_epoch = 0
@@ -489,7 +491,7 @@ def main(args):
             checkpoint = pt_load(
                 os.path.join(args.resume, 'state.pt'), map_location='cpu'
             )
-            if 'epoch' in checkpoint:
+            if not 'epoch' in checkpoint:
                 # resuming a train checkpoint w/ epoch and optimizer state
                 start_epoch = checkpoint['epoch']
                 sd = checkpoint['state_dict']
@@ -511,11 +513,22 @@ def main(args):
                 )
             else:
                 # loading a bare (model only) checkpoint for fine-tune or evaluation
-                model.load_state_dict(checkpoint)
+                sd = checkpoint['state_dict']
+                if (
+                    not args.distributed
+                    and next(iter(sd.items()))[0].startswith('module')
+                ):
+                    sd = {k[len('module.'):]: v for k, v in sd.items()}
+                model.load_state_dict(sd)
+                #model.load_state_dict(checkpoint)
                 logging.info(
                     f'=> loaded checkpoint \'{args.resume}\' (epoch {start_epoch})'
                 )
-
+    if args.train_data or args.dataset_type == 'synthetic':
+        assert not args.trace, 'Cannot train with traced model'
+        model, optimizer, scaler = create_optimizer(
+            args=args, model=model, dsinit=dsinit
+        )
     # initialize datasets
     # multimodal
     tokenizer = get_tokenizer(args.model, context_length=args.max_sequence_length)
@@ -532,6 +545,13 @@ def main(args):
     emb_dataset, emb_dataloader, emb_losses = None, None, None
     if args.mtl:
         emb_dataset, emb_dataloader, emb_losses = create_embeddings_dataloader(args)
+
+    long_clip_dataloader=None,
+    if args.longclip:
+        from training.sharegpt4v import share4v_val_dataset, share4v_train_dataset
+        trainset = share4v_train_dataset(preprocess_train, tokenizer)
+        #train_sampler = DistributedSampler(dataset=trainset, shuffle=True)
+        long_clip_dataloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=32, pin_memory=True)
 
     # create scheduler if train
     scheduler = None
@@ -642,6 +662,7 @@ def main(args):
             emb_dataloader=emb_dataloader,
             emb_losses=emb_losses,
             tb_writer=writer,
+            long_clip_dataloader=long_clip_dataloader,
         )
         completed_epoch = epoch + 1
 
