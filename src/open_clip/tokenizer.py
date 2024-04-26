@@ -484,7 +484,7 @@ class HFTokenizer:
 
         if self.permute_start_positions:
             bs, maxlen = inputids.size()
-            suffixes = torch.randint(0, context_length - maxlen, (bs,)).tolist()
+            suffixes = torch.randint(0, context_length - maxlen + 1, (bs,)).tolist()
             inputids = torch.stack(
                 [
                     f.pad(inputids[i], (suffix, context_length - suffix - maxlen))

@@ -594,18 +594,24 @@ def get_dataset_fn(data_path, dataset_type):
         raise ValueError(f'Unsupported dataset type: {dataset_type}')
 
 
-def get_multimodal_data(args, preprocess_fns, epoch=0, tokenizer=None):
+def get_multimodal_data(
+    args, preprocess_fns, epoch=0, train_tokenizer=None, val_tokenizer=None
+):
     preprocess_train, preprocess_val = preprocess_fns
     data = {}
 
     if args.train_data or args.dataset_type == 'synthetic':
         data['train'] = get_dataset_fn(args.train_data, args.dataset_type)(
-            args, preprocess_train, is_train=True, epoch=epoch, tokenizer=tokenizer
+            args,
+            preprocess_train,
+            is_train=True,
+            epoch=epoch,
+            tokenizer=train_tokenizer
         )
 
     if args.val_data:
         data['val'] = get_dataset_fn(args.val_data, args.dataset_type)(
-            args, preprocess_val, is_train=False, tokenizer=tokenizer
+            args, preprocess_val, is_train=False, tokenizer=val_tokenizer
         )
 
     if args.imagenet_val is not None:

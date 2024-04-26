@@ -518,16 +518,22 @@ def main(args):
 
     # initialize datasets
     # multimodal
-    tokenizer = get_tokenizer(
+    train_tokenizer = get_tokenizer(
         args.model,
         context_length=args.max_sequence_length,
         permute_start_positions=True,
+    )
+    val_tokenizer = get_tokenizer(
+        args.model,
+        context_length=args.max_sequence_length,
+        permute_start_positions=False,
     )
     data = get_multimodal_data(
         args,
         (preprocess_train, preprocess_val),
         epoch=start_epoch,
-        tokenizer=tokenizer,
+        train_tokenizer=train_tokenizer,
+        val_tokenizer=val_tokenizer
     )
     assert len(data), (
         'At least one train or eval dataset must be specified.'
@@ -608,7 +614,7 @@ def main(args):
         evaluate(
             model,
             preprocess_val,
-            tokenizer,
+            val_tokenizer,
             data,
             start_epoch,
             args,
@@ -620,7 +626,7 @@ def main(args):
         evaluate(
             model,
             preprocess_val,
-            tokenizer,
+            val_tokenizer,
             data,
             start_epoch,
             args,
@@ -716,7 +722,7 @@ def main(args):
             evaluate(
                 model,
                 preprocess_val,
-                tokenizer,
+                val_tokenizer,
                 data,
                 completed_epoch,
                 args,
