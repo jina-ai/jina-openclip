@@ -701,6 +701,12 @@ def parse_args(args):
         action='store_true',
         help='If set to true apply pca to image features and collect long & short loss',
     )
+    parser.add_argument(
+        '--pca-dim',
+        type=int,
+        default=None,
+        help='What dim of pca to apply to short loss, if args.longclip is set to true',
+    )
 
     args = parser.parse_args(args)
 

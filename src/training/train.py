@@ -75,6 +75,14 @@ class DummyEmbeddingsDataloader:
     def __next__(self):
         return None, (None, None)
 
+class DummyLongClipDataloader:
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return None, None, None
+
 
 def train_one_epoch(
     model,
@@ -107,6 +115,8 @@ def train_one_epoch(
     
     if args.longclip:
         assert long_clip_dataloader is not None
+    else:
+        long_clip_dataloader = DummyLongClipDataloader()
         
     # set epoch in process safe manner via sampler or shared_epoch
     data['train'].set_epoch(epoch)
@@ -210,9 +220,11 @@ def train_one_epoch(
 
                     losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
 
-                if args.longclip:
+                if args.longclip and args.pca_dim is not None:
                     modelout_short = model(images_short, texts_short)
-                    loss_short = loss(**modelout_short, output_dict=True, pca_dim=32)
+                    loss_short = loss(
+                        **modelout_short, output_dict=True, pca_dim=args.pca_dim
+                    )
                     losses['short_loss'] = 0.1 * loss_short['contrastive_loss']
             total_loss = sum(losses.values())
             losses['loss'] = total_loss

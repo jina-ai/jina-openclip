@@ -9,11 +9,11 @@ import subprocess
 import sys
 from datetime import datetime
 from functools import partial
-from torch.utils.data.distributed import DistributedSampler
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader,RandomSampler
+from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data.distributed import DistributedSampler
 from transformers import AutoTokenizer
 
 try:
@@ -548,10 +548,22 @@ def main(args):
 
     long_clip_dataloader=None,
     if args.longclip:
-        from training.sharegpt4v import share4v_val_dataset, share4v_train_dataset
+        from training.sharegpt4v import share4v_train_dataset, share4v_val_dataset
+
         trainset = share4v_train_dataset(preprocess_train, tokenizer)
-        #train_sampler = DistributedSampler(dataset=trainset, shuffle=True)
-        long_clip_dataloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=32, pin_memory=True)
+        train_sampler = (
+            DistributedSampler(dataset=trainset, shuffle=True)
+            if args.distributed
+            else None
+        )
+        long_clip_dataloader = torch.utils.data.DataLoader(
+            trainset,
+            batch_size=args.batch_size,
+            sampler=train_sampler,
+            num_workers=32,
+            pin_memory=True,
+            shuffle=True
+        )
 
     # create scheduler if train
     scheduler = None
