@@ -73,7 +73,7 @@ class GatherFeatures:
 
                 all_features = torch.cat(gathered_features, dim=0)
         if pca_dim:
-            all_features = PCA(all_features)
+            all_features = PCA(all_features,pca_dim)
         return all_features
 
 
@@ -95,7 +95,6 @@ def gather_features(
         rank=rank,
         world_size=world_size,
         use_horovod=use_horovod,
-        pca_dim=pca_dim,
     )
     return (
         gather(image_features, pca_dim=pca_dim), # apply PCA on image faetures if set
@@ -161,7 +160,7 @@ class ClipLoss(nn.Module):
                 logits_per_text = logits_per_image.T
         else:
             if pca_dim:
-                image_features = PCA(image_features)
+                image_features = PCA(image_features, pca_dim)
             logits_per_image = logit_scale * image_features @ text_features.T
             logits_per_text = logit_scale * text_features @ image_features.T
 

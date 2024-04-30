@@ -396,7 +396,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
         clip_model=model,
         _tokenizer=tokenizer,
         hf_tokenizer_name=args.mteb_tokenizer_name,
-        max_seq_length=args.mteb_max_seq_length,
+        max_seq_length=args.mteb_max_sequence_length,
         device=args.device,
     )
 

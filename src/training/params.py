@@ -334,6 +334,12 @@ def parse_args(args):
     )
     parser.add_argument('--aug-cfg', nargs='*', default={}, action=ParseKwargs)
     parser.add_argument(
+        '--max-sequence-length',
+        default=None,
+        type=int,
+        help='CLIP training max sequence length.',
+    )
+    parser.add_argument(
         '--grad-checkpointing',
         default=False,
         action='store_true',
@@ -605,7 +611,7 @@ def parse_args(args):
         help='The tokenizer to use when running the MTEB benchmark.',
     )
     parser.add_argument(
-        '--mteb-max-seq-length',
+        '--mteb-max-sequence-length',
         type=int,
         default=8192,
         help='The max sequence length used during MTEB evaluation.',
@@ -653,9 +659,9 @@ def parse_args(args):
         help='The tokenizer to use for the embedding dataloader.',
     )
     parser.add_argument(
-        '--emb-tokenizer-max-length',
+        '--emb-max-sequence-length',
         type=int,
-        default=128,
+        default=None,
         help='The max sequence length of the embedding dataloader.',
     )
     parser.add_argument(
@@ -694,6 +700,12 @@ def parse_args(args):
         default=False,
         action='store_true',
         help='If set to true apply pca to image features and collect long & short loss',
+    )
+    parser.add_argument(
+        '--pca-dim',
+        type=int,
+        default=None,
+        help='What dim of pca to apply to short loss, if args.longclip is set to true',
     )
 
     args = parser.parse_args(args)
