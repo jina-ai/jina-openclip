@@ -14,6 +14,7 @@ from .loss import (
     ClipLoss,
     CoCaLoss,
     DistillClipLoss,
+    MTLPairLoss,
     SigLipLoss,
     ThreeTowerLoss,
     ThreeTowersCosEmbeddingLoss,
@@ -26,6 +27,7 @@ from .model import (
     load_checkpoint,
     set_model_preprocess_cfg,
 )
+from .mtl_model import MTLPairCLIP
 from .multi_tower_model import ThreeTowersCustomTextCLIP
 from .openai import load_openai_model
 from .pretrained import (
@@ -257,6 +259,10 @@ def create_model(
                 model = ThreeTowersCustomTextCLIP(
                     **model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir
                 )
+            elif 'mtl_training' in model_cfg:
+                model = MTLPairCLIP(
+                    **model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir
+                )
             else:
                 model = CustomTextCLIP(
                     **model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir
@@ -361,6 +367,19 @@ def create_loss(args):
         return CoCaLoss(
             caption_loss_weight=args.coca_caption_loss_weight,
             clip_loss_weight=args.coca_contrastive_loss_weight,
+            local_loss=args.local_loss,
+            gather_with_grad=args.gather_with_grad,
+            cache_labels=True,
+            rank=args.rank,
+            world_size=args.world_size,
+            use_horovod=args.horovod,
+        )
+    elif 'mtl-pair' in args.model_lower():
+        return MTLPairLoss(
+            pair_loss_weight=args.mtl_pair_loss_weight,
+            temperature=args.temperature_pair_loss,
+            bidirectional=args.bidirectional_pair_loss,
+            clip_loss_weight=args.mtl_clip_loss_weight,
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
             cache_labels=True,

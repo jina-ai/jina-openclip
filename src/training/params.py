@@ -523,13 +523,37 @@ def parse_args(args):
         '--3towers-cos-embeddings-loss-weight',
         type=float,
         default=2.0,
-        help='Weight assigned to caption loss in CoCa.',
+        help='Weight assigned to cosine embedding loss when training with 3towers loss.',
     )
     parser.add_argument(
         '--3towers-contrastive-loss-weight',
         type=float,
         default=1.0,
-        help='Weight assigned to contrastive loss when training CoCa.',
+        help='Weight assigned to contrastive loss when training with 3towers loss.',
+    )
+    parser.add_argument(
+        '--mtl-pair-loss-weight',
+        type=float,
+        default=1.0,
+        help='Weight assigned to text pair loss in multitask learning.',
+    )
+    parser.add_argument(
+        '--mtl-clip-loss-weight',
+        type=float,
+        default=1.0,
+        help='Weight assigned to contrastive multimodal pair loss in multitask learning.',
+    )
+    parser.add_argument(
+        '--temperature-pair-loss',
+        type=float,
+        default=0.1,
+        help='Temperature to be assigned to InfoNCELoss for text pair training',
+    )
+    parser.add_argument(
+        '--bidirectional-pair-loss',
+        default=False,
+        action='store_true',
+        help='Option to compute InfoNCELoss, for text pair training, bidirectionally',
     )
     parser.add_argument(
         '--remote-sync',

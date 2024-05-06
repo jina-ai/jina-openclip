@@ -175,6 +175,108 @@ class ClipLoss(nn.Module):
         return {'contrastive_loss': total_loss} if output_dict else total_loss
 
 
+def cos_sim(a: torch.Tensor, b: torch.Tensor):
+    """
+    Computes the cosine similarity cos_sim(a[i], b[j]) for all i and j.
+    :return: Matrix with res[i][j]  = cos_sim(a[i], b[j])
+    """
+    if not isinstance(a, torch.Tensor):
+        a = torch.tensor(a)
+
+    if not isinstance(b, torch.Tensor):
+        b = torch.tensor(b)
+
+    if len(a.shape) == 1:
+        a = a.unsqueeze(0)
+
+    if len(b.shape) == 1:
+        b = b.unsqueeze(0)
+
+    a_norm = torch.nn.functional.normalize(a, p=2, dim=1)
+    b_norm = torch.nn.functional.normalize(b, p=2, dim=1)
+    return torch.mm(a_norm, b_norm.transpose(0, 1))
+
+
+def info_nce(left, right, temperature):
+    logits = nn.functional.log_softmax(cos_sim(left, right) / temperature, dim=1)
+    return -torch.mean(torch.diag(logits))
+
+
+class InfoNCELoss(nn.Module):
+    def __init__(
+        self,
+        temperature: float = 0.05,
+        bidirectional: bool = True,
+    ):
+        super(InfoNCELoss, self).__init__()
+        self.temperature = temperature
+        self.bidirectional = bidirectional
+
+    def forward(self, embeddings_left, embeddings_right):
+        loss = info_nce(embeddings_left, embeddings_right, self.temperature)
+        if self.bidirectional:
+            loss += info_nce(embeddings_right, embeddings_left, self.temperature)
+            return loss / 2
+        return loss
+
+
+class MTLPairLoss(nn.Module):
+    def __init__(
+        self,
+        pair_loss_weight,
+        temperature,
+        bidirectional,
+        clip_loss_weight,
+        pad_id=0,  # pad_token for open_clip custom tokenizer
+        local_loss=False,
+        gather_with_grad=False,
+        cache_labels=False,
+        rank=0,
+        world_size=1,
+        use_horovod=False,
+    ):
+        super(MTLPairLoss, self).__init__()
+
+        self._clip_loss = ClipLoss(
+            local_loss=local_loss,
+            gather_with_grad=gather_with_grad,
+            cache_labels=cache_labels,
+            rank=rank,
+            world_size=world_size,
+            use_horovod=use_horovod,
+        )
+        self._clip_loss_weight = clip_loss_weight
+
+        self._pair_loss = InfoNCELoss(
+            temperature=temperature, bidirectional=bidirectional
+        )
+        self._pair_loss_weight = pair_loss_weight
+
+    def forward(
+        self,
+        image_features,
+        text_features,
+        embedding_batch_features,
+        logit_scale,
+        output_dict=False,
+    ):
+        clip_loss = torch.tensor(0)
+        pair_loss = torch.tensor(0)
+
+        if image_features is not None and text_features is not None:
+            clip_loss = self._clip_loss(image_features, text_features, logit_scale)
+            clip_loss = self._clip_loss_weight * clip_loss
+
+        if embedding_batch_features is not None:
+            pair_loss = self._pair_loss(*embedding_batch_features)
+            pair_loss = pair_loss * self._pair_loss_weight
+
+        if output_dict:
+            return {'multimodal_loss': clip_loss, 'text_pair_loss': pair_loss}
+
+        return clip_loss, pair_loss
+
+
 class ThreeTowersCosEmbeddingLoss(ClipLoss):
     def __init__(
         self,
