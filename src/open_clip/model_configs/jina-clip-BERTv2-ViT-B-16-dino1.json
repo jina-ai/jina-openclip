@@ -10,8 +10,8 @@
     },
     "text_cfg": {
         "context_length": 77,
-        "hf_model_name": "jinaai/jina-bert-v2-base-en-flash",
-        "hf_tokenizer_name": "jinaai/jina-bert-v2-base-en-flash",
+        "hf_model_name": "jinaai/jina-bert-b-en-v1-8k",
+        "hf_tokenizer_name": "jinaai/jina-bert-b-en-v1-8k",
         "hf_pooler_type": "mean_pooler",
         "hf_trust_remote_code": true,
         "proj_type": null
