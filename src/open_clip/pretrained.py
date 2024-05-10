@@ -548,6 +548,9 @@ _PRETRAINED = {
         jina_clip=_pcfg(hf_hub='jinaai/jina-backbone-dino-ViT-B-16/'),
         jina_clip_fp16=_pcfg(hf_hub='jinaai/jina-backbone-dino-ViT-B-16-fp16/'),
     ),
+    'jina-clip-BERTv2-ViT-B-16-eva': dict(
+        jina_clip_fp16=_pcfg(hf_hub='jinaai/jina-clip-BERTv2-ViT-B-16-eva/'),
+    ),
 }
 
 
