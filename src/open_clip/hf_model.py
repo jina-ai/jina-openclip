@@ -141,6 +141,7 @@ class HFTextEncoder(nn.Module):
                 trust_remote_code=trust_remote_code,
                 code_revision=revision,
             )
+            pretrained = True
             create_func, model_args = (
                 (AutoModel.from_pretrained, model_name_or_path)
                 if pretrained
@@ -159,7 +160,8 @@ class HFTextEncoder(nn.Module):
                     trust_remote_code=trust_remote_code,
                     add_pooling_layer=uses_transformer_pooler,
                     code_revision=revision,
-                    use_flash_attn=False, window_size=(-1, -1)
+                    use_flash_attn=False, 
+                    window_size=(-1, -1),
                 )
         else:
             self.config = config

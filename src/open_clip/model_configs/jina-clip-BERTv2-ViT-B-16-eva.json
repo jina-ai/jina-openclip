@@ -11,7 +11,7 @@
         "eva_model_name": "EVA02-B-16",
         "eva_pretrained":"eva02",
         "drop_path_rate": 0.0,
-        "xattn": true,
+        "xattn": false,
         "fusedLN": true,
         "rope": true,
         "pt_hw_seq_len": 14,
