@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from typing import Optional
 
 try:
     import torch.distributed.nn
@@ -16,6 +17,7 @@ try:
 except ImportError:
     hvd = None
 
+from .utils import PCA
 
 class GatherFeatures:
 
@@ -39,7 +41,7 @@ class GatherFeatures:
         if use_horovod:
             assert hvd is not None, 'Please install horovod'
 
-    def __call__(self, features: torch.Tensor):
+    def __call__(self, features: torch.Tensor, pca_dim: Optional[int] = None):
         if self.use_horovod:
             if self.gather_with_grad:
                 all_features = hvd.allgather(features)
@@ -70,7 +72,8 @@ class GatherFeatures:
                     gathered_features[self.rank] = features
 
                 all_features = torch.cat(gathered_features, dim=0)
-
+        if pca_dim:
+            all_features = PCA(all_features)
         return all_features
 
 
@@ -84,6 +87,7 @@ def gather_features(
     rank=0,
     world_size=1,
     use_horovod=False,
+    pca_dim=None
 ):
     gather = GatherFeatures(
         local_loss=local_loss,
@@ -91,10 +95,11 @@ def gather_features(
         rank=rank,
         world_size=world_size,
         use_horovod=use_horovod,
+        pca_dim=pca_dim,
     )
     return (
-        gather(image_features),
-        gather(text_features),
+        gather(image_features, pca_dim=pca_dim), # apply PCA on image faetures if set
+        gather(text_features, pca_dim=None), # never apply PCA on text features
         gather(teacher_features) if teacher_features else None
     )
 
@@ -134,7 +139,7 @@ class ClipLoss(nn.Module):
             labels = self.labels[device]
         return labels
 
-    def get_logits(self, image_features, text_features, logit_scale):
+    def get_logits(self, image_features, text_features, logit_scale, pca_dim: Optional[int] = None):
         if self.world_size > 1:
             all_image_features, all_text_features, _ = gather_features(
                 image_features=image_features,
@@ -144,6 +149,7 @@ class ClipLoss(nn.Module):
                 rank=self.rank,
                 world_size=self.world_size,
                 use_horovod=self.use_horovod,
+                pca_dim=pca_dim
             )
             if self.local_loss:
                 logits_per_image = logit_scale * image_features @ all_text_features.T
@@ -154,15 +160,17 @@ class ClipLoss(nn.Module):
                 )
                 logits_per_text = logits_per_image.T
         else:
+            if pca_dim:
+                image_features = PCA(image_features)
             logits_per_image = logit_scale * image_features @ text_features.T
             logits_per_text = logit_scale * text_features @ image_features.T
 
         return logits_per_image, logits_per_text
 
-    def forward(self, image_features, text_features, logit_scale, output_dict=False):
+    def forward(self, image_features, text_features, logit_scale, output_dict=False, pca_dim = None):
         device = image_features.device
         logits_per_image, logits_per_text = self.get_logits(
-            image_features, text_features, logit_scale
+            image_features, text_features, logit_scale, pca_dim,
         )
 
         labels = self.get_ground_truth(device, logits_per_image.shape[0])

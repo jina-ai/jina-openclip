@@ -6,6 +6,24 @@ from torch import nn as nn
 from torchvision.ops.misc import FrozenBatchNorm2d
 
 
+def PCA(input_tensor, PCA_dim):
+    mean = torch.mean(input_tensor, dim=0)
+    X_centered = input_tensor - mean.unsqueeze(0)
+    X_centered = X_centered.float()
+    cov_matrix = torch.mm(X_centered.T, X_centered)
+    eigenvalues, eigenvectors = torch.linalg.eig(cov_matrix)
+    eigenvalues = eigenvalues.float()
+    eigenvectors = eigenvectors.float()    
+    sorted_indices = torch.argsort(eigenvalues, descending=True)
+    eigenvectors = eigenvectors[:, sorted_indices]
+    principal_components = eigenvectors[:, :PCA_dim]
+    X_transformed = torch.mm(X_centered, principal_components)
+    X_reversed = torch.mm(X_transformed, principal_components.T)
+    X_reversed += mean
+    return X_reversed
+
+
+
 def freeze_batch_norm_2d(module, module_match={}, name=''):
     """
     Converts all `BatchNorm2d` and `SyncBatchNorm` layers of provided module into `FrozenBatchNorm2d`. If `module` is
