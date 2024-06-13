@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .eva_vit_model import EVAVisionTransformer
+from .eva_model import EVAVisionTransformer
 from .hf_model import HFTextEncoder, HFVisionEncoder
 from .modified_resnet import ModifiedResNet
 from .pretrained import download_pretrained, get_pretrained_cfg
@@ -835,9 +835,7 @@ def build_model_from_openai_state_dict(
     transformer_heads = transformer_width // 64
     transformer_layers = len(
         set(
-            k.split('.')[2]
-            for k in state_dict
-            if k.startswith('transformer.resblocks')
+            k.split('.')[2] for k in state_dict if k.startswith('transformer.resblocks')
         )
     )
 
