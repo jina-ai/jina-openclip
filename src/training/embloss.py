@@ -1,11 +1,8 @@
 import itertools
-from copy import deepcopy
 from enum import IntEnum
-from typing import Iterable, Optional
+from typing import Optional, Sequence
 
-import pytorch_metric_learning.distances as pml_distances
 import torch
-from pytorch_metric_learning.losses import NTXentLoss
 from torch import Tensor, nn
 
 
@@ -55,6 +52,16 @@ def cos_sim(a: Tensor, b: Tensor):
     return torch.mm(a_norm, b_norm.transpose(0, 1))
 
 
+def split_embedding_pairs(embeddings):
+    if embeddings.shape[0] % 2 != 0:
+        raise ValueError(
+            'embeddings need to have an even number of rows otherwise it '
+            'cannot be converted to pairs.'
+        )
+    batch_size = embeddings.shape[0] // 2
+    return embeddings[:batch_size], embeddings[batch_size:]
+
+
 def mean_cosine_similarity(*embedding_batches):
     """Compute the mean cosine similarity across all embeddings.
 
@@ -86,7 +93,8 @@ class InfoNCELoss(nn.Module):
         self.temperature = temperature
         self.bidirectional = bidirectional
 
-    def forward(self, embeddings_left, embeddings_right):
+    def forward(self, embeddings):
+        embeddings_left, embeddings_right = split_embedding_pairs(embeddings)
         loss = info_nce(embeddings_left, embeddings_right, self.temperature)
         if self.bidirectional:
             loss += info_nce(embeddings_right, embeddings_left, self.temperature)
@@ -98,12 +106,47 @@ class InfoNCELoss(nn.Module):
         return InputType.PAIR
 
 
+class MRLInfoNCELoss(InfoNCELoss):
+    def __init__(
+        self,
+        temperature: float = 0.05,
+        bidirectional: bool = True,
+        dims: Sequence[int] = (16, 32, 64, 128, 256, 512),
+        weights: Optional[Sequence[int]] = None,
+    ):
+        super().__init__(temperature, bidirectional)
+        if weights:
+            assert len(weights) == len(dims)
+        self._dims = dims
+        self._weights = weights if weights else [1] * len(self._dims)
+
+    def forward(self, embeddings):
+        embeddings_left, embeddings_right = split_embedding_pairs(embeddings)
+        loss = 0.0
+        for dim, weight in zip(self._dims, self._weights):
+            embeddings_left_shrink = embeddings_left[..., :dim]
+            embeddings_right_shrink = embeddings_right[..., :dim]
+            current_loss = info_nce(
+                embeddings_left_shrink, embeddings_right_shrink, self.temperature
+            )
+            if self.bidirectional:
+                current_loss += info_nce(
+                    embeddings_right_shrink,
+                    embeddings_left_shrink,
+                    self.temperature,
+                )
+                current_loss = current_loss / 2
+            loss += current_loss * weight
+        return loss
+
+
 class CosineMSELoss(nn.Module):
     def __init__(self):
         super(CosineMSELoss, self).__init__()
         self._mse_loss = nn.MSELoss()
 
-    def forward(self, embedding_u, embedding_v, labels):
+    def forward(self, embeddings, labels):
+        embedding_u, embedding_v = split_embedding_pairs(embeddings)
         output = torch.functional.F.cosine_similarity(embedding_u, embedding_v)
         return self._mse_loss(output, labels)
 
@@ -116,7 +159,8 @@ class CosinePearsonLoss(nn.Module):
     def __init__(self):
         super(CosinePearsonLoss, self).__init__()
 
-    def forward(self, embedding_u, embedding_v, labels):
+    def forward(self, embeddings, labels):
+        embedding_u, embedding_v = split_embedding_pairs(embeddings)
         output = torch.functional.F.cosine_similarity(embedding_u, embedding_v)
         corrcoef = torch.corrcoef(torch.cat([output[None, :], labels[None, :]]))
         return -corrcoef[0, 1]
@@ -126,85 +170,48 @@ class CosinePearsonLoss(nn.Module):
         return InputType.PAIR_WITH_SCORES
 
 
-class ExtendedTripletLoss(nn.Module):
-    def __init__(self, triplet_margin: float = 0.05, temperature: float = 0.05):
-        super(ExtendedTripletLoss, self).__init__()
-        self.triplet_margin = triplet_margin
-        self.temperature = temperature
-        self._nce_loss = NTXentLoss(
-            distance=pml_distances.CosineSimilarity(), temperature=self.temperature
-        )
-        self._ce_loss = nn.CrossEntropyLoss()
+class CoSentSTSLoss(nn.Module):
+    """
+    CoSent Loss for STS data.
+    Adapted from:
+    https://github.com/UKPLab/sentence-transformers/blob/master/sentence_transformers/losses/CoSENTLoss.py
+    """
 
-    def forward(self, embedding_anchor, embedding_pos, embedding_neg):
-        batch_size = embedding_anchor.shape[0]
+    def __init__(self, scale: float = 20.0):
+        super(CoSentSTSLoss, self).__init__()
+        self._scale = scale
 
-        # triplet loss
-        score_pos = 1.0 - torch.functional.F.cosine_similarity(
-            embedding_anchor, embedding_pos
-        )
-        score_neg = 1.0 - torch.functional.F.cosine_similarity(
-            embedding_anchor, embedding_neg
-        )
-        losses = torch.functional.F.relu(score_pos - score_neg + self.triplet_margin)
-        triplet_loss = losses.mean()
+    def forward(self, embeddings, labels):
+        embedding_u, embedding_v = split_embedding_pairs(embeddings)
+        scores = self._pairwise_cos_sim(embedding_u, embedding_v)
+        scores = scores * self._scale
+        scores = scores[:, None] - scores[None, :]
 
-        # info nce loss with hard negatives
-        embedding_targets = torch.cat([embedding_pos, embedding_neg])
-        labels = torch.arange(start=0, end=batch_size, device=embedding_anchor.device)
-        scores = cos_sim(embedding_anchor, embedding_targets) / self.temperature
-        info_nce_hn_loss = self._ce_loss(scores, labels)
+        # label matrix indicating which pairs are relevant
+        labels = labels[:, None] < labels[None, :]
+        labels = labels.float()
 
-        # info nce loss reverse
-        ref_labels = deepcopy(labels)
-        inf_nce_reverse_loss = self._nce_loss(
-            labels=labels,
-            ref_labels=ref_labels,
-            embeddings=embedding_pos,
-            ref_emb=embedding_anchor,
-        )
+        # mask out irrelevant pairs so they are negligible after exp()
+        scores = scores - (1 - labels) * 1e12
 
-        loss = (info_nce_hn_loss + inf_nce_reverse_loss + triplet_loss) / 3
+        # append a zero as e^0 = 1
+        scores = torch.cat((torch.zeros(1).to(scores.device), scores.view(-1)), dim=0)
+        loss = torch.logsumexp(scores, dim=0)
+
         return loss
+
+    @staticmethod
+    def _pairwise_cos_sim(embedding_u, embedding_v):
+        normalized_u = torch.nn.functional.normalize(embedding_u, p=2, dim=1)
+        normalized_v = torch.nn.functional.normalize(embedding_v, p=2, dim=1)
+        return (normalized_u * normalized_v).sum(dim=-1)
 
     @property
     def input_type(self):
-        return InputType.TRIPLET
+        return InputType.PAIR_WITH_SCORES
 
 
-class CELoss(nn.Module):
-    def __init__(self, alpha: float = 0.2):
-        super(CELoss, self).__init__()
-        self._kl_loss = nn.KLDivLoss(reduction='batchmean')
-        self._info_nce_loss = InfoNCEHardNegativeLoss()
-        self._alpha = alpha
-
-    def forward(
-        self, embedding_anchor, embedding_pos, embedding_neg, scores_pos, scores_neg
-    ):
-        emb_scores_pos = torch.functional.F.cosine_similarity(
-            embedding_anchor, embedding_pos
-        )
-        emb_scores_neg = torch.functional.F.cosine_similarity(
-            embedding_anchor, embedding_neg
-        )
-        emb_scores = torch.stack([emb_scores_pos, emb_scores_neg], dim=1)
-        emb_scores = torch.nn.functional.log_softmax(emb_scores, dim=1)
-        ce_scores = torch.stack([scores_pos, scores_neg], dim=1)
-        ce_scores = torch.nn.functional.softmax(ce_scores, dim=1)
-        kl_loss = self._kl_loss(emb_scores, ce_scores)
-        info_nce_loss = self._info_nce_loss(
-            embedding_anchor, embedding_pos, embedding_neg
-        )
-        loss = kl_loss + self._alpha * info_nce_loss
-        return loss
-
-    @property
-    def input_type(self):
-        return InputType.SCORED_TRIPLET
-
-
-class CoSentLoss(nn.Module):
+class CoSentClusteringLoss(nn.Module):
     def __init__(self, tau: float = 0.05):
         """
         Computes a loss that tries to maximize the similarity of text values with the
@@ -212,7 +219,7 @@ class CoSentLoss(nn.Module):
 
         :param tau: inverse factor to scale the similarity values
         """
-        super(CoSentLoss, self).__init__()
+        super(CoSentClusteringLoss, self).__init__()
         self._tau = tau
 
     def forward(self, embeddings, labels):
@@ -240,7 +247,7 @@ class CoSentLoss(nn.Module):
                     continue
                 group_vecs = torch.nn.functional.normalize(group_vecs, p=2, dim=1)
                 # select remaining vectors
-                other_vecs = torch.cat(all_vectors[:i] + all_vectors[i + 1 :])
+                other_vecs = torch.cat(all_vectors[:i] + all_vectors[i + 1:])
                 other_vecs = torch.nn.functional.normalize(other_vecs, p=2, dim=1)
                 pos_sim_values = (
                     group_vecs @ group_vecs.T
@@ -267,11 +274,11 @@ class CoSentLoss(nn.Module):
 class MultiCELoss(nn.Module):
     def __init__(
         self,
-        alpha: float = 1.0,
-        beta: float = 0.0,
+        alpha: float = 0.2,
+        beta: float = 1.0,
         temperature: float = 0.05,
-        bidirectional: bool = True,
-        single_info_nce: bool = True,
+        bidirectional: bool = False,
+        single_info_nce: bool = False,
     ):
         super(MultiCELoss, self).__init__()
 
@@ -361,8 +368,8 @@ class MRLMultiCELoss(MultiCELoss):
         temperature: float = 0.05,
         bidirectional: bool = False,
         single_info_nce: bool = False,
-        dims: Iterable[int] = (16, 32, 64, 128, 256, 512),
-        weights: Optional[Iterable[int]] = None,
+        dims: Sequence[int] = (16, 32, 64, 128, 256, 512),
+        weights: Optional[Sequence[int]] = None,
     ):
         super().__init__(
             alpha,
@@ -423,50 +430,6 @@ class MRLMultiCELoss(MultiCELoss):
             weighted_loss += loss * weight
 
         return weighted_loss
-
-
-class MarginMSELoss(nn.Module):
-    def __init__(self):
-        super(MarginMSELoss, self).__init__()
-        self._mse_loss = nn.MSELoss()
-
-    @staticmethod
-    def _dot_similarity(a: Tensor, b: Tensor):
-        return (a * b).sum(dim=-1)
-
-    def forward(
-        self, embedding_anchor, embedding_pos, embedding_neg, scores_pos, scores_neg
-    ):
-        emb_scores_pos = self._dot_similarity(embedding_anchor, embedding_pos)
-        emb_scores_neg = self._dot_similarity(embedding_anchor, embedding_neg)
-        margin_emb = emb_scores_pos - emb_scores_neg
-        margin_ce = scores_pos - scores_neg
-        return self._mse_loss(margin_emb, margin_ce)
-
-    @property
-    def input_type(self):
-        return InputType.SCORED_TRIPLET
-
-
-class InfoNCEPlus(nn.Module):
-    def __init__(self, temperature: float = 0.05):
-        super(InfoNCEPlus, self).__init__()
-        self.temperature = temperature
-        self._ce_loss = nn.CrossEntropyLoss()
-
-    def forward(self, embedding_anchor, embedding_pos, embedding_neg):
-        batch_size = embedding_anchor.shape[0]
-
-        # info nce loss with hard negatives
-        embedding_targets = torch.cat([embedding_pos, embedding_neg])
-        labels = torch.arange(start=0, end=batch_size, device=embedding_anchor.device)
-        scores = cos_sim(embedding_anchor, embedding_targets) / self.temperature
-        info_nce_hn_loss = self._ce_loss(scores, labels)
-        return info_nce_hn_loss
-
-    @property
-    def tuple_length(self):
-        return 3
 
 
 class InfoNCEHardNegativeLoss(nn.Module):

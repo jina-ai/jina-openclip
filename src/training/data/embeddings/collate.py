@@ -1,24 +1,27 @@
-from typing import Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from training.data.embeddings.utils import lookahead
-from training.embloss import InputType
 from transformers.tokenization_utils import PreTrainedTokenizer
+
+from src.training.embloss import InputType
+from src.training.data.embeddings.utils import lookahead
 
 
 @lookahead
 def dynamic_collate(
-    batch: tuple[
-        list[str],
-        list[tuple[tuple[str], Union[tuple[float], None]]],
+    batch: Tuple[
+        List[str],
+        List[Optional[int]],
+        List[Tuple[Tuple[str], Union[Tuple[float], None]]],
     ],
     tokenizer: PreTrainedTokenizer,
     tokenizer_options: dict,
-    input_type_dict: dict[str, str],
+    input_type_dict: Dict[str, str],
 ):
     dataset, batch = list(zip(*batch))
     dataset = dataset[0]
+
     input_type = (
         input_type_dict[dataset] if dataset in input_type_dict else input_type_dict['*']
     )
@@ -33,16 +36,21 @@ def dynamic_collate(
 
 
 def collate_fn(
-    batch: list[tuple[tuple[str], Union[tuple[float], None]]],
+    batch: List[Tuple[Tuple[str], Union[Tuple[float], None]]],
     tokenizer: PreTrainedTokenizer,
     tokenizer_options: dict,
 ):
+    text_inputs = [
+        single_str_batch
+        for single_str_batch in zip(*[texts for texts, scores in batch])
+    ]
+    text_inputs = [x for li in text_inputs for x in li]
+
     features = [
         tokenizer.batch_encode_plus(
-            list(single_str_batch),
+            text_inputs,
             **tokenizer_options,
         )
-        for single_str_batch in zip(*[texts for texts, scores in batch])
     ]
     scores = [
         torch.tensor(score_batch)
@@ -54,7 +62,7 @@ def collate_fn(
 
 
 def flexible_collate_fn(
-    batch: list[tuple[tuple[str], Union[tuple[float], None]]],
+    batch: List[Tuple[Tuple[str], Union[Tuple[float], None]]],
     tokenizer: PreTrainedTokenizer,
     tokenizer_options: dict,
 ):
