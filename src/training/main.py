@@ -32,7 +32,6 @@ from open_clip import (
     trace_model,
 )
 from open_clip.tokenizer import DEFAULT_CONTEXT_LENGTH
-
 from training.data import MultiS3EmbeddingDataset, dynamic_collate, get_multimodal_data
 from training.distributed import broadcast_object, init_distributed_device, is_master
 from training.eval import evaluate
@@ -82,7 +81,6 @@ def get_latest_checkpoint(path: str, remote: bool):
 
 
 def create_embeddings_dataloader(args):
-
     import training.embloss as embeddings_loss_module
 
     embeddings_dataset = None
@@ -115,9 +113,7 @@ def create_embeddings_dataloader(args):
             args.resume, f'worker{args.rank}-dataset.json'
         )
         if os.path.isfile(embeddings_dataset_checkpoint):
-            logging.info(
-                f'Loading from checkpoint {embeddings_dataset_checkpoint} ...'
-            )
+            logging.info(f'Loading from checkpoint {embeddings_dataset_checkpoint} ...')
             embeddings_dataset = MultiS3EmbeddingDataset.load_from_json(
                 embeddings_dataset_checkpoint,
                 world_size=args.world_size,
@@ -129,9 +125,7 @@ def create_embeddings_dataloader(args):
         )
         datasets = args.emb_datasets.split(',')
         sampling_rates = [float(v) for v in args.emb_sampling_rates.split(',')]
-        sampling_rates = {
-            dataset: sr for dataset, sr in zip(datasets, sampling_rates)
-        }
+        sampling_rates = {dataset: sr for dataset, sr in zip(datasets, sampling_rates)}
         embeddings_dataset = MultiS3EmbeddingDataset(
             bucket=args.emb_datasets_s3_bucket,
             batch_size=args.emb_batch_size,
@@ -466,6 +460,7 @@ def main(args):
         if args.deepspeed:
             if os.path.exists(args.resume):
                 import glob
+
                 all_checkpoints = glob.glob(os.path.join(args.resume, 'epoch_*'))
                 latest_ckpt = -1
                 for ckpt in all_checkpoints:
@@ -478,13 +473,13 @@ def main(args):
                         args.resume, tag=f'epoch_{latest_ckpt}'
                     )
                     logging.info(
-                        f'=> resuming checkpoint \'{args.resume}\' '
+                        f"=> resuming checkpoint '{args.resume}' "
                         f'(epoch {latest_ckpt})'
                     )
                 else:
-                    logging.info(f'=> no checkpoint found at \'{args.resume}\'')
+                    logging.info(f"=> no checkpoint found at '{args.resume}'")
             else:
-                logging.info(f'=> \'{args.resume}\' does not exist!')
+                logging.info(f"=> '{args.resume}' does not exist!")
         else:
             checkpoint = pt_load(
                 os.path.join(args.resume, 'state.pt'), map_location='cpu'
@@ -493,27 +488,26 @@ def main(args):
                 # resuming a train checkpoint w/ epoch and optimizer state
                 start_epoch = checkpoint['epoch']
                 sd = checkpoint['state_dict']
-                if (
-                    not args.distributed
-                    and next(iter(sd.items()))[0].startswith('module')
+                if not args.distributed and next(iter(sd.items()))[0].startswith(
+                    'module'
                 ):
-                    sd = {k[len('module.'):]: v for k, v in sd.items()}
+                    sd = {k[len('module.') :]: v for k, v in sd.items()}
                 model.load_state_dict(sd)
                 if optimizer is not None:
                     checkpoint['optimizer']['param_groups'] = optimizer.state_dict()[
                         'param_groups'
-                        ]
+                    ]
                     optimizer.load_state_dict(checkpoint['optimizer'])
                 if scaler is not None and 'scaler' in checkpoint:
                     scaler.load_state_dict(checkpoint['scaler'])
                 logging.info(
-                    f'=> resuming checkpoint \'{args.resume}\' (epoch {start_epoch})'
+                    f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})"
                 )
             else:
                 # loading a bare (model only) checkpoint for fine-tune or evaluation
                 model.load_state_dict(checkpoint)
                 logging.info(
-                    f'=> loaded checkpoint \'{args.resume}\' (epoch {start_epoch})'
+                    f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})"
                 )
 
     # initialize datasets
@@ -525,9 +519,7 @@ def main(args):
         epoch=start_epoch,
         tokenizer=tokenizer,
     )
-    assert len(data), (
-        'At least one train or eval dataset must be specified.'
-    )
+    assert len(data), 'At least one train or eval dataset must be specified.'
 
     emb_dataset, emb_dataloader, emb_losses = None, None, None
     if args.mtl:
@@ -657,7 +649,7 @@ def main(args):
                 model.save_checkpoint(
                     save_dir=ds_checkpoint_path,
                     tag=f'epoch_{str(completed_epoch)}',
-                    client_state=client_state
+                    client_state=client_state,
                 )
         elif args.save_logs:
             checkpoint_dict = {
@@ -684,7 +676,7 @@ def main(args):
                     dataset_ckpt_path = os.path.join(
                         args.checkpoint_path,
                         ckpt_dir,
-                        f'worker{args.rank}-dataset.json'
+                        f'worker{args.rank}-dataset.json',
                     )
                     emb_dataset.write_to_json(dataset_ckpt_path)
 

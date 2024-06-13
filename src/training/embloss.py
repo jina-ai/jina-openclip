@@ -175,7 +175,7 @@ class ExtendedTripletLoss(nn.Module):
 class CELoss(nn.Module):
     def __init__(self, alpha: float = 0.2):
         super(CELoss, self).__init__()
-        self._kl_loss = nn.KLDivLoss(reduction="batchmean")
+        self._kl_loss = nn.KLDivLoss(reduction='batchmean')
         self._info_nce_loss = InfoNCEHardNegativeLoss()
         self._alpha = alpha
 
@@ -240,7 +240,7 @@ class CoSentLoss(nn.Module):
                     continue
                 group_vecs = torch.nn.functional.normalize(group_vecs, p=2, dim=1)
                 # select remaining vectors
-                other_vecs = torch.cat(all_vectors[:i] + all_vectors[i + 1:])
+                other_vecs = torch.cat(all_vectors[:i] + all_vectors[i + 1 :])
                 other_vecs = torch.nn.functional.normalize(other_vecs, p=2, dim=1)
                 pos_sim_values = (
                     group_vecs @ group_vecs.T
@@ -277,10 +277,10 @@ class MultiCELoss(nn.Module):
 
         if bidirectional and not single_info_nce:
             raise ValueError(
-                "Bidirectional loss should only be used with single info nce loss."
+                'Bidirectional loss should only be used with single info nce loss.'
             )
 
-        self._kl_loss = nn.KLDivLoss(reduction="batchmean")
+        self._kl_loss = nn.KLDivLoss(reduction='batchmean')
         self._info_nce_loss = InfoNCEHardNegativeLoss(
             temperature=temperature, bidirectional=bidirectional
         )

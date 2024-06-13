@@ -2,10 +2,9 @@ from typing import Union
 
 import numpy as np
 import torch
-from transformers.tokenization_utils import PreTrainedTokenizer
-
 from training.data.embeddings.utils import lookahead
 from training.embloss import InputType
+from transformers.tokenization_utils import PreTrainedTokenizer
 
 
 @lookahead

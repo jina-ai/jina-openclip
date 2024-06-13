@@ -25,7 +25,7 @@ def is_master(args, local=False):
 
 def is_using_horovod():
     # NOTE w/ horovod run, OMPI vars should be set, but w/ SLURM PMI vars will be set
-    # Differentiating between horovod and DDP use via SLURM may not be possible, so 
+    # Differentiating between horovod and DDP use via SLURM may not be possible, so
     # horovod arg still required...
     ompi_vars = ['OMPI_COMM_WORLD_RANK', 'OMPI_COMM_WORLD_SIZE']
     pmi_vars = ['PMI_RANK', 'PMI_SIZE']
@@ -97,12 +97,9 @@ def init_distributed_device(args):
                 'type': 'Lamb',
                 'params': {
                     'bias_correction': True,
-                    'betas': [
-                        args.beta1,
-                        args.beta2
-                    ],
-                    'eps': args.eps
-                }
+                    'betas': [args.beta1, args.beta2],
+                    'eps': args.eps,
+                },
             }
         else:
             optimizer = {
@@ -110,18 +107,15 @@ def init_distributed_device(args):
                 'adam_w_mode': True,
                 'params': {
                     'bias_correction': True,
-                    'betas': [
-                        args.beta1,
-                        args.beta2
-                    ],
-                    'eps': args.eps
-                }
+                    'betas': [args.beta1, args.beta2],
+                    'eps': args.eps,
+                },
             }
 
         with open(args.deepspeed_config, 'w') as f:
             dsconfig = {
                 'train_batch_size': (
-                    args.batch_size * args. world_size * args.accum_freq
+                    args.batch_size * args.world_size * args.accum_freq
                 ),
                 'train_micro_batch_size_per_gpu': args.batch_size,
                 'gradient_accumulation_steps': args.accum_freq,
@@ -134,15 +128,12 @@ def init_distributed_device(args):
                     'initial_scale_power': 16,
                     'loss_scale_window': 1000,
                     'hysteresis': 2,
-                    'min_loss_scale': 1
+                    'min_loss_scale': 1,
                 },
                 'bf16': {
                     'enabled': args.precision == 'bf16' or args.precision == 'bfloat16',
                 },
-                'amp': {
-                    'enabled': args.precision == 'amp',
-                    'opt_level': 'O2'
-                },
+                'amp': {'enabled': args.precision == 'amp', 'opt_level': 'O2'},
                 # 'flops_profiler': {
                 #     'enabled': True,
                 #     'profile_step': -1,
@@ -154,8 +145,8 @@ def init_distributed_device(args):
                     'enabled': True,
                     'verbose': False,
                     'prof_all': True,
-                    'debug': False
-                }
+                    'debug': False,
+                },
             }
 
             if args.grad_clip_norm is not None:
@@ -186,12 +177,8 @@ def init_distributed_device(args):
                     'stage3_prefetch_bucket_size': 1e7,
                     'stage3_param_persistence_threshold': 1e5,
                     'sub_group_size': 1e9,
-                    'offload_optimizer': {
-                        'device': 'cpu'
-                    },
-                    'offload_param': {
-                        'device': 'cpu'
-                    },
+                    'offload_optimizer': {'device': 'cpu'},
+                    'offload_param': {'device': 'cpu'},
                     'allgather_bucket_size': args.zero_bucket_size,
                     'reduce_bucket_size': args.zero_bucket_size,
                 }

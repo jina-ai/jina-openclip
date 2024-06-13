@@ -10,7 +10,6 @@ from itertools import islice
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from torch.utils.data import IterableDataset
-
 from training.data.embeddings.utils import (
     SimLMCrossEncoder,
     download_shard,
@@ -121,9 +120,8 @@ class S3EmbeddingDataset(IterableDataset):
         if len(self._shards) > 0:
             shard_len = get_shard_size(self._bucket, self._shards[0], self._dialect)
 
-            if (
-                1 < len(shards) <= stop_index
-                and (max_shards is None or max_shards >= len(shards))
+            if 1 < len(shards) <= stop_index and (
+                max_shards is None or max_shards >= len(shards)
             ):
                 end_shard_len = get_shard_size(
                     self._bucket, self._shards[-1], self._dialect
@@ -182,7 +180,7 @@ class S3EmbeddingDataset(IterableDataset):
         future_shard_pth = self._async_download_shard(self._current_shard_num)
 
         for shard_num, shard in enumerate(
-            self._shards[self._current_shard_num:], self._current_shard_num
+            self._shards[self._current_shard_num :], self._current_shard_num
         ):
             self._current_shard = shard
             self._current_shard_num = shard_num

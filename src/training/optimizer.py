@@ -72,7 +72,7 @@ def create_optimizer(args, model: nn.Module, dsinit=None):
             except ModuleNotFoundError or ImportError:
                 raise ModuleNotFoundError(
                     'DeepSpeed is required in order to use the LAMB optimizer, use '
-                    '\'pip install deepspeed\' to install'
+                    "'pip install deepspeed' to install"
                 )
             optimizer = FusedLamb(
                 params=params, betas=(args.beta1, args.beta2), eps=args.eps
@@ -96,6 +96,7 @@ def create_optimizer(args, model: nn.Module, dsinit=None):
 
         if args.precision == 'amp':
             from torch.cuda.amp import GradScaler
+
             scaler = GradScaler()
         else:
             scaler = None

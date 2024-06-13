@@ -68,7 +68,6 @@ def backward(total_loss, model, scaler=None, deepspeed=False):
 
 
 class DummyEmbeddingsDataloader:
-
     def __iter__(self):
         return self
 
@@ -112,7 +111,10 @@ def train_one_epoch(
 
     accum_images, accum_texts, accum_features = [], [], {}
     accum_emb_datasets, accum_emb_batches, accum_emb_labels, accum_embeddings = (
-        [], [], [], []
+        [],
+        [],
+        [],
+        [],
     )
 
     losses_m = {}
@@ -130,10 +132,9 @@ def train_one_epoch(
     start = time.time()
 
     # training loop
-    for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels))) in enumerate(zip(
-        dataloader, islice(emb_dataloader, 1, None)
-    )):
-
+    for i, (mm_batch, (emb_dataset, (emb_batch, emb_labels))) in enumerate(
+        zip(dataloader, islice(emb_dataloader, 1, None))
+    ):
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
 
@@ -158,34 +159,27 @@ def train_one_epoch(
             optimizer.zero_grad()
 
         if args.accum_freq == 1:
-
             # WITHOUT Gradient Accumulation
 
             with autocast():
-
                 modelout = model(images, texts)
                 logit_scale = modelout['logit_scale']
                 if args.distill:
                     with torch.no_grad():
                         dist_model_out = dist_model(images, texts)
-                    modelout.update(
-                        {f'dist_{k}': v for k, v in dist_model_out.items()}
-                    )
+                    modelout.update({f'dist_{k}': v for k, v in dist_model_out.items()})
                 losses = loss(**modelout, output_dict=True)
 
                 if args.mtl:
                     emb_loss_fn = (
                         emb_losses[emb_dataset]
-                        if emb_dataset in emb_losses else emb_losses['*']
+                        if emb_dataset in emb_losses
+                        else emb_losses['*']
                     )
                     embeddings = [
-                        model.module.encode_text(
-                            embedding['input_ids'], normalize=True
-                        )
+                        model.module.encode_text(embedding['input_ids'], normalize=True)
                         if isinstance(model, nn.parallel.DistributedDataParallel)
-                        else model.encode_text(
-                            embedding['input_ids'], normalize=True
-                        )
+                        else model.encode_text(embedding['input_ids'], normalize=True)
                         for embedding in emb_batch
                     ]
                     if args.emb_global_batch:
@@ -205,7 +199,6 @@ def train_one_epoch(
             backward(total_loss, model, scaler=scaler, deepspeed=args.deepspeed)
 
         else:
-
             # WITH Gradient Accumulation
 
             # First, cache the features without any gradient tracking.
@@ -229,7 +222,9 @@ def train_one_epoch(
                                 model.module.encode_text(
                                     embedding['input_ids'], normalize=True
                                 )
-                                if isinstance(model, nn.parallel.DistributedDataParallel)
+                                if isinstance(
+                                    model, nn.parallel.DistributedDataParallel
+                                )
                                 else model.encode_text(
                                     embedding['input_ids'], normalize=True
                                 )
@@ -263,7 +258,7 @@ def train_one_epoch(
                     accum_emb_datasets,
                     accum_emb_batches,
                     accum_emb_labels,
-                    accum_embeddings
+                    accum_embeddings,
                 ) = [], [], [], []
                 continue
 
@@ -281,7 +276,6 @@ def train_one_epoch(
 
             for k in range(args.accum_freq):
                 with autocast():
-
                     images = accum_images[k]
                     texts = accum_texts[k]
 
@@ -298,7 +292,7 @@ def train_one_epoch(
                     for key, val in accum_features.items():
                         accumulated = accum_features[key]
                         inputs[key] = torch.cat(
-                            accumulated[:k] + [modelout[key]] + accumulated[k+1:]
+                            accumulated[:k] + [modelout[key]] + accumulated[k + 1 :]
                         )
 
                     _losses = loss(**inputs, **inputs_no_accum, output_dict=True)
@@ -313,7 +307,8 @@ def train_one_epoch(
                         emb_batch = accum_emb_batches[k]
                         emb_loss_fn = (
                             emb_losses[emb_dataset]
-                            if emb_dataset in emb_losses else emb_losses['*']
+                            if emb_dataset in emb_losses
+                            else emb_losses['*']
                         )
                         embeddings = [
                             model.module.encode_text(
@@ -332,9 +327,9 @@ def train_one_epoch(
                             for idx, _cached_embedding in enumerate(_cached_embeddings):
                                 inputs.append(
                                     torch.cat(
-                                        _cached_embedding[:k] +
-                                        (embeddings[idx],) +
-                                        _cached_embedding[k+1:]
+                                        _cached_embedding[:k]
+                                        + (embeddings[idx],)
+                                        + _cached_embedding[k + 1 :]
                                     )
                                 )
                             if args.emb_global_batch:
@@ -342,9 +337,7 @@ def train_one_epoch(
                                     'Global batch cannot be used in conjunction with '
                                     'labeled data'
                                 )
-                                all_inputs = [
-                                    embeddings_gather(emb) for emb in inputs
-                                ]
+                                all_inputs = [embeddings_gather(emb) for emb in inputs]
                                 embedding_loss = emb_loss_fn(*all_inputs)
                             else:
                                 embedding_loss = emb_loss_fn(*inputs)
@@ -403,7 +396,7 @@ def train_one_epoch(
                 accum_emb_datasets,
                 accum_emb_batches,
                 accum_emb_labels,
-                accum_embeddings
+                accum_embeddings,
             ) = [], [], [], []
 
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.

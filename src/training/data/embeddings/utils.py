@@ -11,14 +11,12 @@ import boto3
 import torch
 from aiohttp import ClientError
 from torch.distributed import get_rank as torch_get_rank
+from training.distributed import is_using_distributed
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     BatchEncoding,
 )
-
-from training.distributed import is_using_distributed
-
 
 s3_client = boto3.client('s3', region_name='eu-central-1')
 
@@ -125,7 +123,7 @@ def get_dataset_info(bucket_name, directory: Optional[str] = None):
         )
         datasets = []
         for out in result.get('CommonPrefixes'):
-            datasets.append(out.get('Prefix')[len(directory) + 1: -1])
+            datasets.append(out.get('Prefix')[len(directory) + 1 : -1])
     # try to get size info
     try:
         tags = get_tags(bucket_name, directory)

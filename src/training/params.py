@@ -138,7 +138,9 @@ def parse_args(args):
         help='When scheduler w/ cooldown used, perform cooldown from total_epochs - cooldown_epochs onwards.',
     )
     parser.add_argument('--lr', type=float, default=None, help='Learning rate.')
-    parser.add_argument('--text-lr', type=float, default=None, help='Learning rate for text tower')
+    parser.add_argument(
+        '--text-lr', type=float, default=None, help='Learning rate for text tower'
+    )
     parser.add_argument('--beta1', type=float, default=None, help='Adam beta 1.')
     parser.add_argument('--beta2', type=float, default=None, help='Adam beta 2.')
     parser.add_argument('--eps', type=float, default=None, help='Adam epsilon.')
@@ -181,8 +183,8 @@ def parse_args(args):
         type=str,
         default='adamw',
         help=(
-            'Optimizer type, one of \'adamw\' or \'lamb\', '
-            '\'lamb\' is only available when using DeepSpeed'
+            "Optimizer type, one of 'adamw' or 'lamb', "
+            "'lamb' is only available when using DeepSpeed"
         ),
     )
     parser.add_argument(
@@ -453,19 +455,19 @@ def parse_args(args):
         '--deepspeed',
         action='store_true',
         default=False,
-        help='Use deepspeed for distributed training.'
+        help='Use deepspeed for distributed training.',
     )
     parser.add_argument(
         '--zero-stage',
         type=int,
         default=1,
-        help='Stage of ZeRO algorith, applicable if deepspeed is enabled.'
+        help='Stage of ZeRO algorith, applicable if deepspeed is enabled.',
     )
     parser.add_argument(
         '--zero-bucket-size',
         type=int,
         default=1e6,
-        help='ZeRO algorith allgather and reduce bucket size.'
+        help='ZeRO algorith allgather and reduce bucket size.',
     )
     parser.add_argument(
         '--ddp-static-graph',
@@ -707,10 +709,11 @@ def parse_args(args):
     if args.deepspeed:
         try:
             import deepspeed
+
             os.environ['ENV_TYPE'] = 'deepspeed'
             dsinit = deepspeed.initialize
         except ImportError or ModuleNotFoundError:
-            print('DeepSpeed is not available, please run \'pip install deepspeed\'')
+            print("DeepSpeed is not available, please run 'pip install deepspeed'")
             exit(0)
     else:
         os.environ['ENV_TYPE'] = 'pytorch'

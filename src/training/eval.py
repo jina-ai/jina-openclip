@@ -21,7 +21,6 @@ from open_clip import (
     get_input_dtype,
     get_tokenizer,
 )
-
 from training.distributed import is_master
 from training.precision import get_autocast
 
