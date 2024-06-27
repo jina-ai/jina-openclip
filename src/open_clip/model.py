@@ -360,8 +360,8 @@ def _build_vision_tower(
                 visual.load_state_dict(state_dict, strict=False)
             else:
                 _error_str = (
-                    f"No checkpoint for model '{_model_name}' found neither locally nor "
-                    f'remotely'
+                    f"No checkpoint for model '{_model_name}' found neither locally "
+                    f'nor remotely'
                 )
                 logging.exception(_error_str)
                 raise RuntimeError(_error_str)
@@ -528,6 +528,7 @@ class CLIP(nn.Module):
         quick_gelu: bool = False,
         init_logit_scale: float = np.log(1 / 0.07),
         init_logit_bias: Optional[float] = None,
+        freeze_logit_scale: bool = False,
         cast_dtype: Optional[torch.dtype] = None,
         output_dict: bool = False,
         cache_dir: Optional[str] = None,
@@ -549,9 +550,13 @@ class CLIP(nn.Module):
         self.text_pool_type = text.pool_type
         self.register_buffer('attn_mask', text.attn_mask, persistent=False)
 
-        self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
+        self.logit_scale = nn.Parameter(
+            torch.ones([]) * init_logit_scale, requires_grad=not freeze_logit_scale
+        )
         if init_logit_bias is not None:
-            self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
+            self.logit_bias = nn.Parameter(
+                torch.ones([]) * init_logit_bias, requires_grad=not freeze_logit_scale
+            )
         else:
             self.logit_bias = None
 
@@ -641,6 +646,7 @@ class CustomTextCLIP(nn.Module):
         quick_gelu: bool = False,
         init_logit_scale: float = np.log(1 / 0.07),
         init_logit_bias: Optional[float] = None,
+        freeze_logit_scale: bool = False,
         cast_dtype: Optional[torch.dtype] = None,
         output_dict: bool = False,
         cache_dir: Optional[str] = None,
@@ -655,9 +661,13 @@ class CustomTextCLIP(nn.Module):
         )
         self.context_length = self.text.context_length
         self.vocab_size = self.text.vocab_size
-        self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
+        self.logit_scale = nn.Parameter(
+            torch.ones([]) * init_logit_scale, requires_grad=not freeze_logit_scale
+        )
         if init_logit_bias is not None:
-            self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
+            self.logit_bias = nn.Parameter(
+                torch.ones([]) * init_logit_bias, requires_grad=not freeze_logit_scale
+            )
         else:
             self.logit_bias = None
 
