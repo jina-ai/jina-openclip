@@ -2,10 +2,9 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from training.data.s3dataset import InputType
+from training.data.utils import lookahead
 from transformers.tokenization_utils import PreTrainedTokenizer
-
-from src.training.embloss import InputType
-from src.training.data.embeddings.utils import lookahead
 
 
 @lookahead
@@ -21,7 +20,6 @@ def dynamic_collate(
 ):
     dataset, batch = list(zip(*batch))
     dataset = dataset[0]
-
     input_type = (
         input_type_dict[dataset] if dataset in input_type_dict else input_type_dict['*']
     )

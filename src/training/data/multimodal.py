@@ -7,6 +7,7 @@ import random
 import sys
 from dataclasses import dataclass
 from multiprocessing import Value
+from typing import Any, Callable, Dict, Optional, Union
 
 import braceexpand
 import numpy as np
@@ -35,53 +36,6 @@ try:
     import horovod.torch as hvd
 except ImportError:
     hvd = None
-
-
-class CSVDataset(Dataset):
-    def __init__(
-        self, input_filename, transforms, img_key, caption_key, sep='\t', tokenizer=None
-    ):
-        logging.debug(f'Loading csv data from {input_filename}.')
-        df = pd.read_csv(input_filename, sep=sep)
-
-        self.images = df[img_key].tolist()
-        self.captions = df[caption_key].tolist()
-        self.transforms = transforms
-        logging.debug('Done loading data.')
-
-        self.tokenize = tokenizer
-
-    def __len__(self):
-        return len(self.captions)
-
-    def __getitem__(self, idx):
-        images = self.transforms(Image.open(str(self.images[idx])))
-        texts = self.tokenize([str(self.captions[idx])])[0]
-        return images, texts
-
-
-class SharedEpoch:
-    def __init__(self, epoch: int = 0):
-        self.shared_epoch = Value('i', epoch)
-
-    def set_value(self, epoch):
-        self.shared_epoch.value = epoch
-
-    def get_value(self):
-        return self.shared_epoch.value
-
-
-@dataclass
-class DataInfo:
-    dataloader: DataLoader
-    sampler: DistributedSampler = None
-    shared_epoch: SharedEpoch = None
-
-    def set_epoch(self, epoch):
-        if self.shared_epoch is not None:
-            self.shared_epoch.set_value(epoch)
-        if self.sampler is not None and isinstance(self.sampler, DistributedSampler):
-            self.sampler.set_epoch(epoch)
 
 
 def expand_urls(urls, weights=None):
@@ -182,26 +136,18 @@ def count_samples(dataloader):
     return n_elements, n_batches
 
 
-def filter_no_caption_or_no_image(sample):
-    has_caption = 'txt' in sample
-    has_image = (
-        'png' in sample or 'jpg' in sample or 'jpeg' in sample or 'webp' in sample
-    )
-    return has_caption and has_image
+def filter_no_caption_or_no_image(sample: Dict[str, Any]):
+    _has_caption = 'txt' in sample
+    _has_image = any([ext in sample for ext in {'png', 'jpeg', 'jpg', 'webp'}])
+    return _has_caption and _has_image
 
 
 def log_and_continue(exn):
-    """
-    Call in an exception handler to ignore any exception, issue a warning, and
-    continue.
-    """
-    logging.warning(f'Handling webdataset error ({repr(exn)}). Ignoring.')
+    logging.warning(f'Handling webdataset error ({repr(exn)}). Ignoring')
     return True
 
 
-def group_by_keys_nothrow(
-    data, keys=base_plus_ext, lcase=True, suffixes=None, _=None
-):
+def group_by_keys_nothrow(data, keys=base_plus_ext, lcase=True, suffixes=None, _=None):
     """
     Return function over iterator that groups key, value pairs into samples.
     """
@@ -261,13 +207,37 @@ _SAMPLE_SHUFFLE_SIZE = 5000
 _SAMPLE_SHUFFLE_INITIAL = 1000
 
 
-class DETShuffle2(wds.PipelineStage):
+class _SharedEpoch:
+    def __init__(self, epoch: int = 0):
+        self.shared_epoch = Value('i', epoch)
+
+    def set_value(self, epoch):
+        self.shared_epoch.value = epoch
+
+    def get_value(self):
+        return self.shared_epoch.value
+
+
+@dataclass
+class DataInfo:
+    dataloader: Union[DataLoader, wds.WebLoader]
+    sampler: Optional[DistributedSampler] = None
+    shared_epoch: Optional[_SharedEpoch] = None
+
+    def set_epoch(self, epoch):
+        if self.shared_epoch is not None:
+            self.shared_epoch.set_value(epoch)
+        if self.sampler is not None and isinstance(self.sampler, DistributedSampler):
+            self.sampler.set_epoch(epoch)
+
+
+class _DETShuffle(wds.PipelineStage):
     def __init__(
         self,
-        bufsize=1000,
-        initial=100,
-        seed=0,
-        epoch=-1,
+        bufsize: int = 1000,
+        initial: int = 100,
+        seed: int = 0,
+        epoch: Union[int, _SharedEpoch] = -1,
     ):
         self.bufsize = bufsize
         self.initial = initial
@@ -275,7 +245,7 @@ class DETShuffle2(wds.PipelineStage):
         self.epoch = epoch
 
     def run(self, src):
-        if isinstance(self.epoch, SharedEpoch):
+        if isinstance(self.epoch, _SharedEpoch):
             epoch = self.epoch.get_value()
         else:
             # NOTE: this is epoch tracking is problematic in a multiprocess
@@ -296,22 +266,16 @@ class DETShuffle2(wds.PipelineStage):
         return _shuffle(src, self.bufsize, self.initial, rng)
 
 
-class ResampledShards2(IterableDataset):
-    """An iterable dataset yielding a list of urls."""
-
+class _ResampledShards(IterableDataset):
     def __init__(
         self,
-        urls,
-        weights=None,
-        nshards=sys.maxsize,
-        worker_seed=None,
-        deterministic=False,
-        epoch=-1,
+        urls: str,
+        weights: Optional[str] = None,
+        nshards: int = sys.maxsize,
+        worker_seed: Optional[Callable] = None,
+        deterministic: bool = False,
+        epoch: Union[int, _SharedEpoch] = -1,
     ):
-        """Sample shards from the shard list with replacement.
-
-        :param urls: a list of URLs as a Python list or brace notation string
-        """
         super().__init__()
         urls, weights = expand_urls(urls, weights)
         self.urls = urls
@@ -330,7 +294,7 @@ class ResampledShards2(IterableDataset):
 
     def __iter__(self):
         """Return an iterator over the shards."""
-        if isinstance(self.epoch, SharedEpoch):
+        if isinstance(self.epoch, _SharedEpoch):
             epoch = self.epoch.get_value()
         else:
             # NOTE: this is epoch tracking is problematic in a multiprocess
@@ -356,19 +320,151 @@ class ResampledShards2(IterableDataset):
                 )
 
 
-def get_wds_dataset(
-    args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None
+class _CSVDataset(Dataset):
+    def __init__(
+        self, input_filename, transforms, img_key, caption_key, sep='\t', tokenizer=None
+    ):
+        logging.debug(f'Loading csv data from {input_filename}.')
+        df = pd.read_csv(input_filename, sep=sep)
+
+        self.images = df[img_key].tolist()
+        self.captions = df[caption_key].tolist()
+        self.transforms = transforms
+        logging.debug('Done loading data.')
+
+        self.tokenize = tokenizer
+
+    def __len__(self):
+        return len(self.captions)
+
+    def __getitem__(self, idx):
+        images = self.transforms(Image.open(str(self.images[idx])))
+        texts = self.tokenize([str(self.captions[idx])])[0]
+        return images, texts
+
+
+class _SyntheticDataset(Dataset):
+    def __init__(
+        self,
+        transform=None,
+        image_size=(224, 224),
+        caption='Dummy caption',
+        dataset_size=100,
+        tokenizer=None,
+    ):
+        self.transform = transform
+        self.image_size = image_size
+        self.caption = caption
+        self.image = Image.new('RGB', image_size)
+        self.dataset_size = dataset_size
+        self.preprocess_txt = lambda text: tokenizer(text)[0]
+
+    def __len__(self):
+        return self.dataset_size
+
+    def __getitem__(self, idx):
+        image = None
+        if self.transform is not None:
+            image = self.transform(self.image)
+        return image, self.preprocess_txt(self.caption)
+
+
+def get_synthetic_dataset(
+    num_samples: int,
+    preprocess_fn: Any,
+    is_train: bool = False,
+    tokenizer: Any = None,
+    distributed: bool = False,
+    workers: int = 1,
+    batch_size: int = 32,
 ):
-    input_shards = args.train_data if is_train else args.val_data
-    assert input_shards is not None
-    resampled = getattr(args, 'dataset_resampled', False) and is_train
+    image_size = preprocess_fn.transforms[0].size
+    dataset = _SyntheticDataset(
+        transform=preprocess_fn,
+        image_size=image_size,
+        dataset_size=num_samples,
+        tokenizer=tokenizer,
+    )
+    numsamples = len(dataset)
+    sampler = DistributedSampler(dataset) if distributed and is_train else None
+    shuffle = is_train and sampler is None
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=workers,
+        pin_memory=True,
+        sampler=sampler,
+        drop_last=is_train,
+    )
+    dataloader.num_samples = numsamples
+    dataloader.num_batches = len(dataloader)
+
+    return DataInfo(dataloader, sampler)
+
+
+def get_csv_dataset(
+    fname: str,
+    preprocess_fn: Any,
+    is_train: bool = False,
+    tokenizer: Any = None,
+    csv_image_key: str = 'image',
+    csv_caption_key: str = 'caption',
+    csv_separator: str = ',',
+    distributed: bool = False,
+    workers: int = 1,
+    batch_size: int = 32,
+):
+    assert fname
+    dataset = _CSVDataset(
+        fname,
+        preprocess_fn,
+        img_key=csv_image_key,
+        caption_key=csv_caption_key,
+        sep=csv_separator,
+        tokenizer=tokenizer,
+    )
+    numsamples = len(dataset)
+    sampler = DistributedSampler(dataset) if distributed and is_train else None
+    shuffle = is_train and sampler is None
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=workers,
+        pin_memory=True,
+        sampler=sampler,
+        drop_last=is_train,
+    )
+    dataloader.num_samples = numsamples
+    dataloader.num_batches = len(dataloader)
+
+    return DataInfo(dataloader, sampler)
+
+
+def get_wds_dataset(
+    shards: str,
+    preprocess_fn: Any,
+    num_samples: Optional[int] = None,
+    is_train: bool = False,
+    tokenizer: Any = None,
+    upsampling_factors: Optional[str] = None,
+    workers: int = 1,
+    batch_size: int = 32,
+    seed: int = 0,
+    epoch: int = 0,
+    floor: bool = False,
+    dataset_resampled: bool = False,
+    world_size: int = 1,
+):
+    assert shards is not None
+    resampled = dataset_resampled and is_train
 
     num_shards = None
     if is_train:
-        if args.train_num_samples is not None:
-            num_samples = args.train_num_samples
-        else:
-            num_samples, num_shards = get_dataset_size(input_shards)
+        if num_samples is None:
+            num_samples, num_shards = get_dataset_size(shards)
             if not num_samples:
                 raise RuntimeError(
                     'Currently, the number of dataset samples must be specified for '
@@ -376,40 +472,37 @@ def get_wds_dataset(
                     'if no dataset length info is present.'
                 )
     else:
-        # Eval will just exhaust the iterator if the size is not specified.
-        num_samples = args.val_num_samples or 0
+        num_samples = num_samples or 0
 
-    shared_epoch = SharedEpoch(
-        epoch=epoch
-    )  # create a shared epoch store to sync epoch to dataloader worker proc
+    shared_epoch = _SharedEpoch(epoch=epoch)
 
-    if is_train and args.train_data_upsampling_factors is not None:
+    if is_train and upsampling_factors is not None:
         assert resampled, (
-            '--train-data-upsampling-factors is only supported when sampling with '
+            'Upsampling factors are only supported when sampling with '
             'replacement (with --dataset-resampled).'
         )
 
     if resampled:
         pipeline = [
-            ResampledShards2(
-                input_shards,
-                weights=args.train_data_upsampling_factors,
+            _ResampledShards(
+                shards,
+                weights=upsampling_factors,
                 deterministic=True,
                 epoch=shared_epoch,
             )
         ]
     else:
-        pipeline = [wds.SimpleShardList(input_shards)]
+        pipeline = [wds.SimpleShardList(shards)]
 
     # at this point we have an iterator over all the shards
     if is_train:
         if not resampled:
             pipeline.extend(
                 [
-                    DETShuffle2(
+                    _DETShuffle(
                         bufsize=_SHARD_SHUFFLE_SIZE,
                         initial=_SHARD_SHUFFLE_INITIAL,
-                        seed=args.seed,
+                        seed=seed,
                         epoch=shared_epoch,
                     ),
                     wds.split_by_node,
@@ -441,25 +534,25 @@ def get_wds_dataset(
             wds.select(filter_no_caption_or_no_image),
             wds.decode('pilrgb', handler=log_and_continue),
             wds.rename(image='jpg;png;jpeg;webp', text='txt'),
-            wds.map_dict(image=preprocess_img, text=lambda text: tokenizer(text)[0]),
+            wds.map_dict(image=preprocess_fn, text=lambda text: tokenizer(text)[0]),
             wds.to_tuple('image', 'text'),
-            wds.batched(args.batch_size, partial=not is_train),
+            wds.batched(batch_size, partial=not is_train),
         ]
     )
     dataset = wds.DataPipeline(*pipeline)
 
     if is_train:
         if not resampled:
-            num_shards = num_shards or len(expand_urls(input_shards)[0])
+            num_shards = num_shards or len(expand_urls(shards)[0])
             assert (
-                num_shards >= args.workers * args.world_size
+                num_shards >= workers * world_size
             ), 'number of shards must be >= total workers'
         # roll over and repeat a few samples to get same number of full batches on
         # each node
         round_fn = math.floor if floor else math.ceil
-        global_batch_size = args.batch_size * args.world_size
+        global_batch_size = batch_size * world_size
         num_batches = round_fn(num_samples / global_batch_size)
-        num_workers = max(1, args.workers)
+        num_workers = max(1, workers)
         num_worker_batches = round_fn(
             num_batches / num_workers
         )  # per dataloader worker
@@ -470,136 +563,16 @@ def get_wds_dataset(
         )  # each worker is iterating over this
     else:
         # last batches are partial, eval is done on single (master) node
-        num_batches = math.ceil(num_samples / args.batch_size)
+        num_batches = math.ceil(num_samples / batch_size)
 
     dataloader = wds.WebLoader(
         dataset,
         batch_size=None,
         shuffle=False,
-        num_workers=args.workers,
-        persistent_workers=args.workers > 0,
+        num_workers=workers,
+        persistent_workers=workers > 0,
     )
-
-    # FIXME not clear which approach is better, with_epoch before vs after dataloader?
-    # hoping to resolve via https://github.com/webdataset/webdataset/issues/169
-    # if is_train:
-    #     # roll over and repeat a few samples to get same number of full batches on
-    #     # each node
-    #     global_batch_size = args.batch_size * args.world_size
-    #     num_batches = math.ceil(num_samples / global_batch_size)
-    #     num_workers = max(1, args.workers)
-    #     num_batches = math.ceil(num_batches / num_workers) * num_workers
-    #     num_samples = num_batches * global_batch_size
-    #     dataloader = dataloader.with_epoch(num_batches)
-    # else:
-    #     # last batches are partial, eval is done on single (master) node
-    #     num_batches = math.ceil(num_samples / args.batch_size)
-
-    # add meta-data to dataloader instance for convenience
     dataloader.num_batches = num_batches
     dataloader.num_samples = num_samples
 
     return DataInfo(dataloader=dataloader, shared_epoch=shared_epoch)
-
-
-def get_csv_dataset(args, preprocess_fn, is_train, _=0, tokenizer=None):
-    input_filename = args.train_data if is_train else args.val_data
-    assert input_filename
-    dataset = CSVDataset(
-        input_filename,
-        preprocess_fn,
-        img_key=args.csv_img_key,
-        caption_key=args.csv_caption_key,
-        sep=args.csv_separator,
-        tokenizer=tokenizer,
-    )
-    num_samples = len(dataset)
-    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
-    shuffle = is_train and sampler is None
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=shuffle,
-        num_workers=args.workers,
-        pin_memory=True,
-        sampler=sampler,
-        drop_last=is_train,
-    )
-    dataloader.num_samples = num_samples
-    dataloader.num_batches = len(dataloader)
-
-    return DataInfo(dataloader, sampler)
-
-
-class SyntheticDataset(Dataset):
-    def __init__(
-        self,
-        transform=None,
-        image_size=(224, 224),
-        caption='Dummy caption',
-        dataset_size=100,
-        tokenizer=None,
-    ):
-        self.transform = transform
-        self.image_size = image_size
-        self.caption = caption
-        self.image = Image.new('RGB', image_size)
-        self.dataset_size = dataset_size
-        self.preprocess_txt = lambda text: tokenizer(text)[0]
-
-    def __len__(self):
-        return self.dataset_size
-
-    def __getitem__(self, idx):
-        if self.transform is not None:
-            image = self.transform(self.image)
-        return image, self.preprocess_txt(self.caption)
-
-
-def get_synthetic_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
-    image_size = preprocess_fn.transforms[0].size
-    dataset = SyntheticDataset(
-        transform=preprocess_fn,
-        image_size=image_size,
-        dataset_size=args.train_num_samples,
-        tokenizer=tokenizer,
-    )
-    num_samples = len(dataset)
-    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
-    shuffle = is_train and sampler is None
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=shuffle,
-        num_workers=args.workers,
-        pin_memory=True,
-        sampler=sampler,
-        drop_last=is_train,
-    )
-    dataloader.num_samples = num_samples
-    dataloader.num_batches = len(dataloader)
-
-    return DataInfo(dataloader, sampler)
-
-
-def get_dataset_fn(data_path, dataset_type):
-    if dataset_type == 'webdataset':
-        return get_wds_dataset
-    elif dataset_type == 'csv':
-        return get_csv_dataset
-    elif dataset_type == 'synthetic':
-        return get_synthetic_dataset
-    elif dataset_type == 'auto':
-        ext = data_path.split('.')[-1]
-        if ext in ['csv', 'tsv']:
-            return get_csv_dataset
-        elif ext in ['tar']:
-            return get_wds_dataset
-        else:
-            raise ValueError(
-                f'Tried to figure out dataset type, but failed for extension {ext}.'
-            )
-    else:
-        raise ValueError(f'Unsupported dataset type: {dataset_type}')

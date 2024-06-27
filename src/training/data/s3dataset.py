@@ -6,12 +6,12 @@ import random
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from enum import IntEnum
 from itertools import islice
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from torch.utils.data import IterableDataset
-
-from src.training.data.embeddings.utils import (
+from training.data.utils import (
     SimLMCrossEncoder,
     add_instruction,
     download_shard,
@@ -19,11 +19,34 @@ from src.training.data.embeddings.utils import (
     get_directories,
     get_shard_size,
     get_shards,
-    log_on_rank
+    log_on_rank,
 )
-from src.training.embloss import InputType, get_tuple_length
 
 csv.field_size_limit(sys.maxsize)
+
+
+class InputType(IntEnum):
+    PAIR = 2
+    TRIPLET = 3
+    SCORED_TRIPLET = 4
+    MULTIPLE_NEGATIVES = 5
+    MULTIPLE_NEGATIVES_WITHOUT_SCORES = 6
+    PAIR_WITH_SCORES = 7
+    TEXT_WITH_LABEL = 8
+
+
+def get_tuple_length(input_type: InputType):
+    if input_type in (InputType.PAIR, InputType.PAIR_WITH_SCORES):
+        return 2
+    elif input_type in (InputType.TRIPLET, InputType.SCORED_TRIPLET):
+        return 3
+    elif input_type in (InputType.TEXT_WITH_LABEL,):
+        return 1
+    elif input_type in (
+        InputType.MULTIPLE_NEGATIVES,
+        InputType.MULTIPLE_NEGATIVES_WITHOUT_SCORES,
+    ):
+        return 9
 
 
 class S3Dataset(IterableDataset):
@@ -124,9 +147,8 @@ class S3Dataset(IterableDataset):
         if len(self._shards) > 0:
             shard_len = get_shard_size(self._bucket, self._shards[0], self._dialect)
 
-            if (
-                1 < len(shards) <= stop_index
-                and (max_shards is None or max_shards >= len(shards))
+            if 1 < len(shards) <= stop_index and (
+                max_shards is None or max_shards >= len(shards)
             ):
                 end_shard_len = get_shard_size(
                     self._bucket, self._shards[-1], self._dialect
@@ -185,7 +207,7 @@ class S3Dataset(IterableDataset):
         future_shard_pth = self._async_download_shard(self._current_shard_num)
 
         for shard_num, shard in enumerate(
-            self._shards[self._current_shard_num:], self._current_shard_num
+            self._shards[self._current_shard_num :], self._current_shard_num
         ):
             self._current_shard = shard
             self._current_shard_num = shard_num
