@@ -1,7 +1,12 @@
 import logging
+from typing import Optional
 
 
-def setup_logging(log_file, level, include_host=False):
+def setup_logging(
+    logfile: Optional[str] = None,
+    level: str = logging.INFO,
+    include_host: bool = False,
+):
     if include_host:
         import socket
 
@@ -24,7 +29,7 @@ def setup_logging(log_file, level, include_host=False):
     stream_handler.setFormatter(formatter)
     logging.root.addHandler(stream_handler)
 
-    if log_file:
-        file_handler = logging.FileHandler(filename=log_file)
+    if logfile:
+        file_handler = logging.FileHandler(filename=logfile)
         file_handler.setFormatter(formatter)
         logging.root.addHandler(file_handler)

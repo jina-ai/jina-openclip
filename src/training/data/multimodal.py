@@ -37,7 +37,7 @@ except ImportError:
     hvd = None
 
 
-class CsvDataset(Dataset):
+class CSVDataset(Dataset):
     def __init__(
         self, input_filename, transforms, img_key, caption_key, sep='\t', tokenizer=None
     ):
@@ -91,9 +91,10 @@ def expand_urls(urls, weights=None):
     if isinstance(urls, str):
         urllist = urls.split('::')
         weights = weights.split('::')
-        assert (
-            len(weights) == len(urllist)
-        ), f'Expected the number of data components ({len(urllist)}) and weights({len(weights)}) to match.'
+        assert len(weights) == len(urllist), (
+            f'Expected the number of data components ({len(urllist)}) and weights '
+            f'({len(weights)}) to match.'
+        )
         weights = [float(weight) for weight in weights]
         all_urls, all_weights = [], []
         for url, weight in zip(urllist, weights):
@@ -119,12 +120,7 @@ def get_dataset_size(shards):
         # FIXME this used to be eval(open(...)) but that seemed rather unsafe
         total_size = ast.literal_eval(open(len_filename, 'r').read())
     else:
-        total_size = None  # num samples undefined
-        # some common dataset sizes (at time of authors last download)
-        # CC3M (train): 2905954
-        # CC12M: 10968539
-        # LAION-400M: 407332084
-        # LAION-2B (english): 2170337258
+        total_size = None
     num_shards = len(shards_list)
     return total_size, num_shards
 
@@ -195,18 +191,19 @@ def filter_no_caption_or_no_image(sample):
 
 
 def log_and_continue(exn):
-    """Call in an exception handler to ignore any exception, issue a warning, and continue."""
+    """
+    Call in an exception handler to ignore any exception, issue a warning, and
+    continue.
+    """
     logging.warning(f'Handling webdataset error ({repr(exn)}). Ignoring.')
     return True
 
 
 def group_by_keys_nothrow(
-    data, keys=base_plus_ext, lcase=True, suffixes=None, handler=None
+    data, keys=base_plus_ext, lcase=True, suffixes=None, _=None
 ):
-    """Return function over iterator that groups key, value pairs into samples.
-
-    :param keys: function that splits the key into key and extension (base_plus_ext)
-    :param lcase: convert suffixes to lower case (Default value = True)
+    """
+    Return function over iterator that groups key, value pairs into samples.
     """
     current_sample = None
     for filesample in data:
@@ -217,9 +214,10 @@ def group_by_keys_nothrow(
             continue
         if lcase:
             suffix = suffix.lower()
-        # FIXME webdataset version throws if suffix in current_sample, but we have a potential for
-        #  this happening in the current LAION400m dataset if a tar ends with same prefix as the next
-        #  begins, rare, but can happen since prefix aren't unique across tar files in that dataset
+        # FIXME webdataset version throws if suffix in current_sample, but we have a
+        #  potential for this happening in the current LAION400m dataset if a tar ends
+        #  with same prefix as the next begins, rare, but can happen since prefix
+        #  aren't unique across tar files in that dataset
         if (
             current_sample is None
             or prefix != current_sample['__key__']
@@ -235,7 +233,6 @@ def group_by_keys_nothrow(
 
 
 def tarfile_to_samples_nothrow(src, handler=log_and_continue):
-    # NOTE this is a re-impl of the webdataset impl with group_by_keys that doesn't throw
     streams = url_opener(src, handler=handler)
     files = tar_file_expander(streams, handler=handler)
     samples = group_by_keys_nothrow(files, handler=handler)
@@ -246,10 +243,12 @@ def pytorch_worker_seed(increment=0):
     """get dataloader worker seed from pytorch"""
     worker_info = get_worker_info()
     if worker_info is not None:
-        # favour using the seed already created for pytorch dataloader workers if it exists
+        # favour using the seed already created for pytorch dataloader
+        # workers if it exists
         seed = worker_info.seed
         if increment:
-            # space out seed increments so they can't overlap across workers in different iterations
+            # space out seed increments so they can't overlap across workers in
+            # different iterations
             seed += increment * max(1, worker_info.num_workers)
         return seed
     # fallback to wds rank based seed
@@ -262,7 +261,7 @@ _SAMPLE_SHUFFLE_SIZE = 5000
 _SAMPLE_SHUFFLE_INITIAL = 1000
 
 
-class detshuffle2(wds.PipelineStage):
+class DETShuffle2(wds.PipelineStage):
     def __init__(
         self,
         bufsize=1000,
@@ -279,16 +278,19 @@ class detshuffle2(wds.PipelineStage):
         if isinstance(self.epoch, SharedEpoch):
             epoch = self.epoch.get_value()
         else:
-            # NOTE: this is epoch tracking is problematic in a multiprocess (dataloader workers or train)
-            # situation as different workers may wrap at different times (or not at all).
+            # NOTE: this is epoch tracking is problematic in a multiprocess
+            # (dataloader workers or train) situation as different workers may wrap
+            # at different times (or not at all).
             self.epoch += 1
             epoch = self.epoch
         rng = random.Random()
         if self.seed < 0:
-            # If seed is negative, we use the worker's seed, this will be different across all nodes/workers
+            # If seed is negative, we use the worker's seed, this will be different
+            # across all nodes/workers
             seed = pytorch_worker_seed(epoch)
         else:
-            # This seed to be deterministic AND the same across all nodes/workers in each epoch
+            # This seed to be deterministic AND the same across all nodes/workers in
+            # each epoch
             seed = self.seed + epoch
         rng.seed(seed)
         return _shuffle(src, self.bufsize, self.initial, rng)
@@ -315,9 +317,10 @@ class ResampledShards2(IterableDataset):
         self.urls = urls
         self.weights = weights
         if self.weights is not None:
-            assert (
-                len(self.urls) == len(self.weights)
-            ), f'Number of urls {len(self.urls)} and weights {len(self.weights)} should match.'
+            assert len(self.urls) == len(self.weights), (
+                f'Number of urls {len(self.urls)} and weights {len(self.weights)} '
+                f'should match.'
+            )
         assert isinstance(self.urls[0], str)
         self.nshards = nshards
         self.rng = random.Random()
@@ -330,14 +333,16 @@ class ResampledShards2(IterableDataset):
         if isinstance(self.epoch, SharedEpoch):
             epoch = self.epoch.get_value()
         else:
-            # NOTE: this is epoch tracking is problematic in a multiprocess (dataloader workers or train)
-            # situation as different workers may wrap at different times (or not at all).
+            # NOTE: this is epoch tracking is problematic in a multiprocess
+            # (dataloader workers or train) situation as different workers may wrap
+            # at different times (or not at all).
             self.epoch += 1
             epoch = self.epoch
         if self.deterministic:
             # reset seed w/ epoch if deterministic
             if self.worker_seed is None:
-                # pytorch worker seed should be deterministic due to being init by arg.seed + rank + worker id
+                # pytorch worker seed should be deterministic due to being init by
+                # arg.seed + rank + worker id
                 seed = pytorch_worker_seed(epoch)
             else:
                 seed = self.worker_seed() + epoch
@@ -366,8 +371,9 @@ def get_wds_dataset(
             num_samples, num_shards = get_dataset_size(input_shards)
             if not num_samples:
                 raise RuntimeError(
-                    'Currently, the number of dataset samples must be specified for the training dataset. '
-                    'Please specify it via `--train-num-samples` if no dataset length info is present.'
+                    'Currently, the number of dataset samples must be specified for '
+                    'the training dataset. Please specify it via `--train-num-samples` '
+                    'if no dataset length info is present.'
                 )
     else:
         # Eval will just exhaust the iterator if the size is not specified.
@@ -378,7 +384,10 @@ def get_wds_dataset(
     )  # create a shared epoch store to sync epoch to dataloader worker proc
 
     if is_train and args.train_data_upsampling_factors is not None:
-        assert resampled, '--train_data_upsampling_factors is only supported when sampling with replacement (with --dataset-resampled).'
+        assert resampled, (
+            '--train-data-upsampling-factors is only supported when sampling with '
+            'replacement (with --dataset-resampled).'
+        )
 
     if resampled:
         pipeline = [
@@ -397,7 +406,7 @@ def get_wds_dataset(
         if not resampled:
             pipeline.extend(
                 [
-                    detshuffle2(
+                    DETShuffle2(
                         bufsize=_SHARD_SHUFFLE_SIZE,
                         initial=_SHARD_SHUFFLE_INITIAL,
                         seed=args.seed,
@@ -409,8 +418,9 @@ def get_wds_dataset(
             )
         pipeline.extend(
             [
-                # at this point, we have an iterator over the shards assigned to each worker at each node
-                tarfile_to_samples_nothrow,  # wds.tarfile_to_samples(handler=log_and_continue),
+                # at this point, we have an iterator over the shards assigned to
+                # each worker at each node
+                tarfile_to_samples_nothrow,
                 wds.shuffle(
                     bufsize=_SAMPLE_SHUFFLE_SIZE,
                     initial=_SAMPLE_SHUFFLE_INITIAL,
@@ -421,7 +431,8 @@ def get_wds_dataset(
         pipeline.extend(
             [
                 wds.split_by_worker,
-                # at this point, we have an iterator over the shards assigned to each worker
+                # at this point, we have an iterator over the shards assigned to
+                # each worker
                 wds.tarfile_to_samples(handler=log_and_continue),
             ]
         )
@@ -435,7 +446,6 @@ def get_wds_dataset(
             wds.batched(args.batch_size, partial=not is_train),
         ]
     )
-
     dataset = wds.DataPipeline(*pipeline)
 
     if is_train:
@@ -444,7 +454,8 @@ def get_wds_dataset(
             assert (
                 num_shards >= args.workers * args.world_size
             ), 'number of shards must be >= total workers'
-        # roll over and repeat a few samples to get same number of full batches on each node
+        # roll over and repeat a few samples to get same number of full batches on
+        # each node
         round_fn = math.floor if floor else math.ceil
         global_batch_size = args.batch_size * args.world_size
         num_batches = round_fn(num_samples / global_batch_size)
@@ -472,7 +483,8 @@ def get_wds_dataset(
     # FIXME not clear which approach is better, with_epoch before vs after dataloader?
     # hoping to resolve via https://github.com/webdataset/webdataset/issues/169
     # if is_train:
-    #     # roll over and repeat a few samples to get same number of full batches on each node
+    #     # roll over and repeat a few samples to get same number of full batches on
+    #     # each node
     #     global_batch_size = args.batch_size * args.world_size
     #     num_batches = math.ceil(num_samples / global_batch_size)
     #     num_workers = max(1, args.workers)
@@ -490,10 +502,10 @@ def get_wds_dataset(
     return DataInfo(dataloader=dataloader, shared_epoch=shared_epoch)
 
 
-def get_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
+def get_csv_dataset(args, preprocess_fn, is_train, _=0, tokenizer=None):
     input_filename = args.train_data if is_train else args.val_data
     assert input_filename
-    dataset = CsvDataset(
+    dataset = CSVDataset(
         input_filename,
         preprocess_fn,
         img_key=args.csv_img_key,
@@ -534,7 +546,6 @@ class SyntheticDataset(Dataset):
         self.caption = caption
         self.image = Image.new('RGB', image_size)
         self.dataset_size = dataset_size
-
         self.preprocess_txt = lambda text: tokenizer(text)[0]
 
     def __len__(self):
@@ -592,26 +603,3 @@ def get_dataset_fn(data_path, dataset_type):
             )
     else:
         raise ValueError(f'Unsupported dataset type: {dataset_type}')
-
-
-def get_multimodal_data(args, preprocess_fns, epoch=0, tokenizer=None):
-    preprocess_train, preprocess_val = preprocess_fns
-    data = {}
-
-    if args.train_data or args.dataset_type == 'synthetic':
-        data['train'] = get_dataset_fn(args.train_data, args.dataset_type)(
-            args, preprocess_train, is_train=True, epoch=epoch, tokenizer=tokenizer
-        )
-
-    if args.val_data:
-        data['val'] = get_dataset_fn(args.val_data, args.dataset_type)(
-            args, preprocess_val, is_train=False, tokenizer=tokenizer
-        )
-
-    if args.imagenet_val is not None:
-        data['imagenet-val'] = get_imagenet(args, preprocess_fns, 'val')
-
-    if args.imagenet_v2 is not None:
-        data['imagenet-v2'] = get_imagenet(args, preprocess_fns, 'v2')
-
-    return data

@@ -31,7 +31,8 @@ class S3Dataset(IterableDataset):
         self,
         bucket: str,
         dataset: str,
-        fabric,
+        world_size: int,
+        global_rank: int,
         input_type_dict: Dict[str, str],
         task_type: Optional[str] = None,
         directory: Optional[str] = None,
@@ -48,8 +49,6 @@ class S3Dataset(IterableDataset):
 
         :param bucket: The name of the bucket where the data is stored.
         :param dataset: The name of the dataset to iterate over.
-        :param fabric: A fabric instance to get information about the current process'
-            rank.
         :param input_type_dict: A dictionary mapping datasets to input types.
         :param max_shards: The maximum number of shards to iterate over before
             returning. None by default.
@@ -68,7 +67,7 @@ class S3Dataset(IterableDataset):
         self._dialect = dialect
         self._current_shard_num = shard_num
         self._current_index = (
-            index if index is not None else (fabric.global_rank if interleaved else 0)
+            index if index is not None else (global_rank if interleaved else 0)
         )
         self._task_type = task_type
         self._task_implementation = task_implementation
@@ -101,8 +100,8 @@ class S3Dataset(IterableDataset):
         else:
             self._input_has_score = False
 
-        num_workers = fabric.world_size
-        rank = fabric.global_rank
+        num_workers = world_size
+        rank = global_rank
         self._rank = rank
         self._interleaved = interleaved
         if interleaved:
@@ -277,7 +276,8 @@ class MultiDataset(IterableDataset):
     def __init__(
         self,
         bucket: str,
-        fabric,
+        world_size: int,
+        global_rank: int,
         batch_size: int,
         input_type_dict: Dict[str, str],
         datasets: Optional[Union[List[str], List[Dict[str, Any]]]] = None,
@@ -322,12 +322,14 @@ class MultiDataset(IterableDataset):
         super().__init__()
         self._bucket = bucket
         self._batch_size = batch_size
-        self._fabric = fabric
+        self._world_size = world_size
+        self._global_rank = global_rank
         self._input_type_dict = input_type_dict
         self._synchronous = synchronous
         self._task_types = task_types or dict()
         self._task_implementation = task_implementation
 
+        datasets: Optional[Union[List[str], List[Dict[str, Any]]]]
         if datasets is None:
             if not os.path.exists(self._bucket):
                 datasets = [
@@ -344,30 +346,33 @@ class MultiDataset(IterableDataset):
 
         if isinstance(datasets, list):
             self._datasets = {
-                ds_path: S3Dataset(
+                dspath: S3Dataset(
                     bucket,
-                    _path_to_name(ds_path),
-                    fabric,
+                    _path_to_name(dspath),
+                    world_size=world_size,
+                    global_rank=global_rank,
                     input_type_dict=input_type_dict,
-                    task_type=self._task_types.get(ds_path),
+                    task_type=self._task_types.get(dspath),
                     task_implementation=self._task_implementation,
-                    directory=_path_to_dir(ds_path),
+                    directory=_path_to_dir(dspath),
                     max_shards=max_shards,
                     dialect=dialect,
                     interleaved=synchronous,
                 )
-                for ds_path in datasets
+                for dspath in datasets
             }
         else:
+            datasets: Dict[str, Dict[str, Any]]
             self._datasets = {
-                ds_path: S3Dataset(
+                dspath: S3Dataset(
                     bucket=bucket,
-                    dataset=_path_to_name(ds_path),
-                    directory=_path_to_dir(ds_path),
-                    fabric=fabric,
+                    dataset=_path_to_name(dspath),
+                    directory=_path_to_dir(dspath),
+                    world_size=world_size,
+                    global_rank=global_rank,
                     interleaved=synchronous,
                     input_type_dict=input_type_dict,
-                    task_type=self._task_types.get(ds_path),
+                    task_type=self._task_types.get(dspath),
                     task_implementation=self._task_implementation,
                     max_shards=dataset['max_shards'],
                     dialect=dataset['dialect'],
@@ -379,8 +384,9 @@ class MultiDataset(IterableDataset):
                         else {}
                     ),
                 )
-                for ds_path, dataset in datasets.items()
+                for dspath, dataset in datasets.items()
             }
+
         self._sampling_rates = {
             ds_path: len(dataset) for ds_path, dataset in self._datasets.items()
         }
@@ -418,7 +424,7 @@ class MultiDataset(IterableDataset):
         self.current_dataset = None
 
         if rng_state is None:
-            seed_offset = 0 if synchronous else fabric.global_rank
+            seed_offset = 0 if synchronous else global_rank
             # multiply base seed by 64 to avoid overlaps in multi-gpu training
             self._rng = random.Random(64 * seed + seed_offset)
         else:
@@ -430,7 +436,7 @@ class MultiDataset(IterableDataset):
         while not self._max_batches or self._max_batches > self._num_batches:
             dataset = self._rng.choices(
                 list(self._sampling_rates.keys()),
-                weights=(self._sampling_rates.values()),
+                weights=list(self._sampling_rates.values()),
             )[0]
             self.current_dataset = dataset
 
@@ -442,7 +448,7 @@ class MultiDataset(IterableDataset):
                     log_on_rank(f'reached the end of dataset {dataset}, rebuilding')
                     self._datasets[dataset].cleanup()
                     self._datasets[dataset] = self.rebuild_dataset(
-                        dataset, self._fabric
+                        dataset, self._world_size, self._global_rank
                     )
                     sources[dataset] = iter(self._datasets[dataset])
                     yield next(sources[dataset])
@@ -452,12 +458,13 @@ class MultiDataset(IterableDataset):
     def __len__(self):
         return self._max_batches * self._batch_size
 
-    def rebuild_dataset(self, dataset: str, fabric):
+    def rebuild_dataset(self, dataset: str, world_size: int, global_rank: int):
         return S3Dataset(
             bucket=self._bucket,
             dataset=_path_to_name(dataset),
+            world_size=world_size,
+            global_rank=global_rank,
             directory=_path_to_dir(dataset),
-            fabric=fabric,
             max_shards=self._datasets[dataset]._max_shards,
             dialect=self._datasets[dataset]._dialect,
             input_type_dict=self._input_type_dict,
@@ -494,10 +501,11 @@ class MultiDataset(IterableDataset):
             ds.cleanup()
 
     @classmethod
-    def load_state_dict(cls, state_dict, fabric):
+    def load_state_dict(cls, state_dict, world_size: int, global_rank: int):
         return cls(
             bucket=state_dict['bucket'],
-            fabric=fabric,
+            world_size=world_size,
+            global_rank=global_rank,
             input_type_dict=state_dict['input_type_dict'],
             datasets=state_dict['datasets'],
             sampling_rates=state_dict['sampling_rates'],
@@ -517,13 +525,14 @@ class MultiDataset(IterableDataset):
                 os.makedirs(directory_path)
             with open(fname, 'w') as json_file:
                 json.dump(self.state_dict(), json_file)
-        except Exception:
+        except Exception as e:
+            _ = str(e)
             log_on_rank('File already exist, skipping.')  # avoid race condition
 
     @classmethod
-    def load_from_json(cls, fname: str, fabric):
+    def load_from_json(cls, fname: str, world_size: int, global_rank: int):
         with open(fname, 'r') as json_file:
-            return cls.load_state_dict(json.load(json_file), fabric)
+            return cls.load_state_dict(json.load(json_file), world_size, global_rank)
 
     @property
     def num_batches(self):
