@@ -1,8 +1,9 @@
-""" CLIP Model
+"""CLIP Model
 
 Adapted from https://github.com/openai/CLIP. Originally MIT License,
 Copyright (c) 2021 OpenAI.
 """
+
 import copy
 import logging
 import math

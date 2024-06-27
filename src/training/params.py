@@ -78,7 +78,7 @@ def parse_args(args):
         '--train-data-s3-upsampling-factors',
         type=str,
         default=None,
-        help=('Similar to --train-data-upsampling-factors, but for --train-data-s3.'),
+        help='Similar to --train-data-upsampling-factors, but for --train-data-s3.',
     )
     parser.add_argument(
         '--train-data-s3-bucket',

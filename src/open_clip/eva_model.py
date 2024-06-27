@@ -558,9 +558,9 @@ class EVAVisionTransformer(nn.Module):
         super().__init__()
         self.image_size = img_size
         self.num_classes = num_classes
-        self.num_features = (
-            self.embed_dim
-        ) = embed_dim  # num_features for consistency with other models
+        self.num_features = self.embed_dim = (
+            embed_dim  # num_features for consistency with other models
+        )
 
         self.patch_embed = PatchEmbed(
             img_size=img_size,
