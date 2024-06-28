@@ -272,7 +272,8 @@ def parse_args(args):
     )
     parser.add_argument(
         '--use-bnb-linear',
-        default=None,
+        default=False,
+        action='store_true',
         help=(
             'Replaces the network linear layers from the bitsandbytes library. '
             'Allows for int8 training/inference, etc.'
@@ -467,8 +468,8 @@ def parse_args(args):
     )
     parser.add_argument(
         '--freeze-temperature',
-        default=0.05,
-        type=float,
+        default=False,
+        action='store_true',
         help='Keep the temperature parameter constant during training.',
     )
     parser.add_argument(
@@ -489,7 +490,7 @@ def parse_args(args):
     parser.add_argument(
         '--mtl-loss',
         type=str,
-        default='',
+        default=None,
         help=(
             'Comma separated or JSON list of loss functions to use for MTL ' 'training.'
         ),
@@ -670,14 +671,14 @@ def parse_args(args):
     # ------------------------------------------------------------------- PREPROCESSING
     parser.add_argument(
         '--max-sequence-length',
-        default=None,
+        default=77,
         type=int,
         help='CLIP training max sequence length.',
     )
     parser.add_argument(
         '--mtl-max-sequence-length',
         type=int,
-        default=None,
+        default=77,
         help='The max sequence length of the MTL dataloader.',
     )
     parser.add_argument(
@@ -740,19 +741,19 @@ def parse_args(args):
     parser.add_argument(
         '--zeroshot-frequency',
         type=int,
-        default=2,
+        default=1,
         help='How often (in epochs) to run zero shot evaluation.',
     )
     parser.add_argument(
         '--clip-benchmark-frequency',
         type=int,
-        default=5,
+        default=1,
         help='How often (in epochs) to run evaluation using the CLIP benchmark.',
     )
     parser.add_argument(
         '--mteb-frequency',
         type=int,
-        default=5,
+        default=1,
         help='How often (in epochs) to run evaluation on MTEB.',
     )
     parser.add_argument(
@@ -770,7 +771,16 @@ def parse_args(args):
     parser.add_argument(
         '--clip-benchmark-datasets',
         type=str,
-        default='wds/mscoco_captions,wds/flickr8k,wds/flickr30k,wds/imagenetv2',
+        default=(
+            'wds/mscoco_captions,'
+            'wds/multilingual_mscoco_captions,'
+            'wds/flickr8k,'
+            'wds/flickr30k,'
+            'wds/flickr30k-200,'
+            'wds/crossmodal3600,'
+            'wds/xtd200,'
+            'wds/imagenet1k'
+        ),
         help='Specify datasets to use in CLIP benchmark.',
     )
     parser.add_argument(
