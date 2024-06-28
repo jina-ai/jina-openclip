@@ -165,6 +165,7 @@ def train_one_epoch(
 
                 if args.unify_batch:
                     modelout = model(images, texts)
+                    logit_scale = modelout['logit_scale']
                     embeddings = [
                         model.module.encode_text(
                             embedding['input_ids'], normalize=True
