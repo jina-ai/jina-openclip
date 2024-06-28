@@ -163,21 +163,8 @@ def train_one_epoch(
 
             with autocast():
 
-                modelout = model(images, texts)
-                logit_scale = modelout['logit_scale']
-                if args.distill:
-                    with torch.no_grad():
-                        dist_model_out = dist_model(images, texts)
-                    modelout.update(
-                        {f'dist_{k}': v for k, v in dist_model_out.items()}
-                    )
-                losses = loss(**modelout, output_dict=True)
-
-                if args.mtl:
-                    emb_loss_fn = (
-                        emb_losses[emb_dataset]
-                        if emb_dataset in emb_losses else emb_losses['*']
-                    )
+                if args.unify_batch:
+                    modelout = model(images, texts)
                     embeddings = [
                         model.module.encode_text(
                             embedding['input_ids'], normalize=True
@@ -188,17 +175,54 @@ def train_one_epoch(
                         )
                         for embedding in emb_batch
                     ]
-                    if args.emb_global_batch:
-                        assert len(emb_labels) == 0, (
-                            'Global batch cannot be used in conjunction with labeled '
-                            'data'
-                        )
-                        all_embeddings = [embeddings_gather(emb) for emb in embeddings]
-                        embedding_loss = emb_loss_fn(*all_embeddings)
-                    else:
-                        embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
+                    left, right = embeddings[0], embeddings[1]
+                    modelout['image_features'] = torch.cat(
+                        [modelout['image_features'], left], dim=0
+                    )
+                    modelout['text_features'] = torch.cat(
+                        [modelout['text_features'], right], dim=0,
+                    )
+                    losses = loss(**modelout, output_dict=True)
 
-                    losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
+                else:
+                    modelout = model(images, texts)
+                    logit_scale = modelout['logit_scale']
+                    if args.distill:
+                        with torch.no_grad():
+                            dist_model_out = dist_model(images, texts)
+                        modelout.update(
+                            {f'dist_{k}': v for k, v in dist_model_out.items()}
+                        )
+                    losses = loss(**modelout, output_dict=True)
+
+                    if args.mtl:
+                        emb_loss_fn = (
+                            emb_losses[emb_dataset]
+                            if emb_dataset in emb_losses else emb_losses['*']
+                        )
+                        embeddings = [
+                            model.module.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
+                            if isinstance(model, nn.parallel.DistributedDataParallel)
+                            else model.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
+                            for embedding in emb_batch
+                        ]
+                        if args.emb_global_batch:
+                            assert len(emb_labels) == 0, (
+                                'Global batch cannot be used in conjunction with '
+                                'labeled data'
+                            )
+                            all_embeddings = [
+                                embeddings_gather(emb) for emb in embeddings
+                            ]
+                            embedding_loss = emb_loss_fn(*all_embeddings)
+                        else:
+                            embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
+
+                        losses['embedding_loss'] = args.emb_loss_weight * embedding_loss
 
             total_loss = sum(losses.values())
             losses['loss'] = total_loss
@@ -211,34 +235,60 @@ def train_one_epoch(
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
                 with autocast():
-                    modelout = model(images, texts)
+                    if args.unify_batch:
+                        modelout = model(images, texts)
+                        embeddings = [
+                            model.module.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
+                            if isinstance(model, nn.parallel.DistributedDataParallel)
+                            else model.encode_text(
+                                embedding['input_ids'], normalize=True
+                            )
+                            for embedding in emb_batch
+                        ]
+                        left, right = embeddings[0], embeddings[1]
+                        for f in ('logit_scale', 'logit_bias'):
+                            modelout.pop(f, None)
 
-                    for f in ('logit_scale', 'logit_bias'):
-                        modelout.pop(f, None)
+                        for key, val in list(modelout.items()) + [
+                            ('left_features', left), ('right_features', right)
+                        ]:
+                            if key in accum_features:
+                                accum_features[key].append(val)
+                            else:
+                                accum_features[key] = [val]
+                    else:
+                        modelout = model(images, texts)
 
-                    for key, val in modelout.items():
-                        if key in accum_features:
-                            accum_features[key].append(val)
-                        else:
-                            accum_features[key] = [val]
+                        for f in ('logit_scale', 'logit_bias'):
+                            modelout.pop(f, None)
 
-                    if args.mtl:
-                        # if we have no labels == pair training
-                        if len(emb_labels) == 0:
-                            embeddings = [
-                                model.module.encode_text(
-                                    embedding['input_ids'], normalize=True
-                                )
-                                if isinstance(model, nn.parallel.DistributedDataParallel)
-                                else model.encode_text(
-                                    embedding['input_ids'], normalize=True
-                                )
-                                for embedding in emb_batch
-                            ]
-                            accum_embeddings.append(embeddings)
-                        # else == triplet training
-                        else:
-                            accum_emb_labels.append(emb_labels)
+                        for key, val in modelout.items():
+                            if key in accum_features:
+                                accum_features[key].append(val)
+                            else:
+                                accum_features[key] = [val]
+
+                        if args.mtl:
+                            # if we have no labels == pair training
+                            if len(emb_labels) == 0:
+                                embeddings = [
+                                    model.module.encode_text(
+                                        embedding['input_ids'], normalize=True
+                                    )
+                                    if isinstance(
+                                        model, nn.parallel.DistributedDataParallel
+                                    )
+                                    else model.encode_text(
+                                        embedding['input_ids'], normalize=True
+                                    )
+                                    for embedding in emb_batch
+                                ]
+                                accum_embeddings.append(embeddings)
+                            # else == triplet training
+                            else:
+                                accum_emb_labels.append(emb_labels)
 
                 accum_images.append(images)
                 accum_texts.append(texts)
@@ -281,40 +331,11 @@ def train_one_epoch(
 
             for k in range(args.accum_freq):
                 with autocast():
-
-                    images = accum_images[k]
-                    texts = accum_texts[k]
-
-                    modelout = model(images, texts)
-
-                    inputs_no_accum = {}
-                    inputs_no_accum['logit_scale'] = logit_scale = modelout.pop(
-                        'logit_scale'
-                    )
-                    if 'logit_bias' in modelout:
-                        inputs_no_accum['logit_bias'] = modelout.pop('logit_bias')
-
-                    inputs = {}
-                    for key, val in accum_features.items():
-                        accumulated = accum_features[key]
-                        inputs[key] = torch.cat(
-                            accumulated[:k] + [modelout[key]] + accumulated[k+1:]
-                        )
-
-                    _losses = loss(**inputs, **inputs_no_accum, output_dict=True)
-                    del inputs
-                    del inputs_no_accum
-                    contrastive_loss = sum(_losses.values())
-                    losses['contrastive_loss'] += contrastive_loss
-                    total_loss = contrastive_loss
-
-                    if args.mtl:
-                        emb_dataset = accum_emb_datasets[k]
-                        emb_batch = accum_emb_batches[k]
-                        emb_loss_fn = (
-                            emb_losses[emb_dataset]
-                            if emb_dataset in emb_losses else emb_losses['*']
-                        )
+                    if args.unify_batch:
+                        images = accum_images[k]
+                        texts = accum_texts[k]
+                        modelout = model(images, texts)
+                        embbatch = accum_emb_batches[k]
                         embeddings = [
                             model.module.encode_text(
                                 embedding['input_ids'], normalize=True
@@ -323,44 +344,127 @@ def train_one_epoch(
                             else model.encode_text(
                                 embedding['input_ids'], normalize=True
                             )
-                            for embedding in emb_batch
+                            for embedding in embbatch
                         ]
+                        left, right = embeddings[0], embeddings[1]
+                        modelout['left_features'] = left
+                        modelout['right_features'] = right
 
-                        if len(accum_emb_labels) == 0:
-                            inputs = []
-                            _cached_embeddings = list(zip(*accum_embeddings))
-                            for idx, _cached_embedding in enumerate(_cached_embeddings):
-                                inputs.append(
-                                    torch.cat(
-                                        _cached_embedding[:k] +
-                                        (embeddings[idx],) +
-                                        _cached_embedding[k+1:]
+                        inputs_no_accum = {}
+                        inputs_no_accum['logit_scale'] = logit_scale = modelout.pop(
+                            'logit_scale'
+                        )
+                        if 'logit_bias' in modelout:
+                            inputs_no_accum['logit_bias'] = modelout.pop('logit_bias')
+
+                        inputs = {}
+                        for key, val in accum_features.items():
+                            accumulated = accum_features[key]
+                            inputs[key] = torch.cat(
+                                accumulated[:k] + [modelout[key]] + accumulated[k+1:]
+                            )
+
+                        inputs['image_features'] = torch.cat(
+                            [inputs['image_features'], inputs['left_features']], dim=0
+                        )
+                        inputs['text_features'] = torch.cat(
+                            [inputs['text_features'], inputs['right_features']], dim=0,
+                        )
+                        _ = inputs.pop('left_features')
+                        _ = inputs.pop('right_features')
+
+                        _losses = loss(**inputs, **inputs_no_accum, output_dict=True)
+                        del inputs
+                        del inputs_no_accum
+                        contrastive_loss = sum(_losses.values())
+                        losses['contrastive_loss'] += contrastive_loss
+                        total_loss = contrastive_loss
+
+                    else:
+
+                        images = accum_images[k]
+                        texts = accum_texts[k]
+
+                        modelout = model(images, texts)
+
+                        inputs_no_accum = {}
+                        inputs_no_accum['logit_scale'] = logit_scale = modelout.pop(
+                            'logit_scale'
+                        )
+                        if 'logit_bias' in modelout:
+                            inputs_no_accum['logit_bias'] = modelout.pop('logit_bias')
+
+                        inputs = {}
+                        for key, val in accum_features.items():
+                            accumulated = accum_features[key]
+                            inputs[key] = torch.cat(
+                                accumulated[:k] + [modelout[key]] + accumulated[k+1:]
+                            )
+
+                        _losses = loss(**inputs, **inputs_no_accum, output_dict=True)
+                        del inputs
+                        del inputs_no_accum
+                        contrastive_loss = sum(_losses.values())
+                        losses['contrastive_loss'] += contrastive_loss
+                        total_loss = contrastive_loss
+
+                        if args.mtl:
+                            emb_dataset = accum_emb_datasets[k]
+                            emb_batch = accum_emb_batches[k]
+                            emb_loss_fn = (
+                                emb_losses[emb_dataset]
+                                if emb_dataset in emb_losses else emb_losses['*']
+                            )
+                            embeddings = [
+                                model.module.encode_text(
+                                    embedding['input_ids'], normalize=True
+                                )
+                                if isinstance(
+                                    model, nn.parallel.DistributedDataParallel
+                                )
+                                else model.encode_text(
+                                    embedding['input_ids'], normalize=True
+                                )
+                                for embedding in emb_batch
+                            ]
+
+                            if len(accum_emb_labels) == 0:
+                                inputs = []
+                                _cached_embeddings = list(zip(*accum_embeddings))
+                                for idx, _cached_embedding in enumerate(
+                                    _cached_embeddings
+                                ):
+                                    inputs.append(
+                                        torch.cat(
+                                            _cached_embedding[:k] +
+                                            (embeddings[idx],) +
+                                            _cached_embedding[k+1:]
+                                        )
                                     )
-                                )
-                            if args.emb_global_batch:
-                                assert len(emb_labels) == 0, (
-                                    'Global batch cannot be used in conjunction with '
-                                    'labeled data'
-                                )
-                                all_inputs = [
-                                    embeddings_gather(emb) for emb in inputs
-                                ]
-                                embedding_loss = emb_loss_fn(*all_inputs)
+                                if args.emb_global_batch:
+                                    assert len(emb_labels) == 0, (
+                                        'Global batch cannot be used in conjunction '
+                                        'with labeled data'
+                                    )
+                                    all_inputs = [
+                                        embeddings_gather(emb) for emb in inputs
+                                    ]
+                                    embedding_loss = emb_loss_fn(*all_inputs)
+                                else:
+                                    embedding_loss = emb_loss_fn(*inputs)
+                                del inputs
                             else:
-                                embedding_loss = emb_loss_fn(*inputs)
-                            del inputs
-                        else:
-                            if args.emb_global_batch:
-                                raise ValueError(
-                                    'Global batch cannot be used in conjunction with '
-                                    'labeled data'
-                                )
-                            emb_labels = accum_emb_labels[k]
-                            embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
+                                if args.emb_global_batch:
+                                    raise ValueError(
+                                        'Global batch cannot be used in conjunction '
+                                        'with labeled data'
+                                    )
+                                emb_labels = accum_emb_labels[k]
+                                embedding_loss = emb_loss_fn(*embeddings, *emb_labels)
 
-                        embedding_loss = args.emb_loss_weight * embedding_loss
-                        losses['embedding_loss'] += embedding_loss
-                        total_loss += embedding_loss
+                            embedding_loss = args.emb_loss_weight * embedding_loss
+                            losses['embedding_loss'] += embedding_loss
+                            total_loss += embedding_loss
 
                 losses['loss'] += total_loss
                 backward(total_loss, model, scaler=scaler, deepspeed=args.deepspeed)

@@ -639,8 +639,9 @@ class CustomTextCLIP(nn.Module):
         vision_cfg: CLIPVisionCfg,
         text_cfg: CLIPTextCfg,
         quick_gelu: bool = False,
-        init_logit_scale: float = np.log(1 / 0.07),
+        init_temperature: float = 0.07,
         init_logit_bias: Optional[float] = None,
+        freeze_logit_scale: bool = False,
         cast_dtype: Optional[torch.dtype] = None,
         output_dict: bool = False,
         cache_dir: Optional[str] = None,
@@ -655,9 +656,14 @@ class CustomTextCLIP(nn.Module):
         )
         self.context_length = self.text.context_length
         self.vocab_size = self.text.vocab_size
-        self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
+        self.logit_scale = nn.Parameter(
+            torch.ones([]) * np.log(1 / init_temperature),
+            requires_grad=not freeze_logit_scale
+        )
         if init_logit_bias is not None:
-            self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
+            self.logit_bias = nn.Parameter(
+                torch.ones([]) * init_logit_bias, requires_grad=not freeze_logit_scale
+            )
         else:
             self.logit_bias = None
 

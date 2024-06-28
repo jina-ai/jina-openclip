@@ -95,11 +95,14 @@ def create_embeddings_dataloader(args):
     loss_init = loss_init or [{'name': 'InfoNCELoss'}]
 
     for d in loss_init:
-        d['name'] = getattr(embeddings_loss_module, d['name'])
+        name = d['name']
+        d['name'] = getattr(embeddings_loss_module, name)
         if 'tasks' not in d:
             d['tasks'] = '*'
         if 'options' not in d:
             d['options'] = {}
+        if name == 'InfoNCELoss':
+            d['options']['temperature'] = args.infonce_loss_temperature
 
     task_dict = {
         task: d['name'](**d['options']) for d in loss_init for task in d['tasks']
@@ -350,9 +353,11 @@ def main(args):
         args.force_image_size = args.force_image_size[0]
 
     random_seed(args.seed, 0)
-    model_kwargs = {}
+    model_kwargs = {
+        'init_temperature': args.clip_loss_temperature,
+        'freeze_logit_scale': args.freeze_clip_loss_temperature
+    }
     if args.siglip:
-        model_kwargs['init_logit_scale'] = np.log(10)  # different from CLIP
         model_kwargs['init_logit_bias'] = -10
 
     model, preprocess_train, preprocess_val = create_model_and_transforms(

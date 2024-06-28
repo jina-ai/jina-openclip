@@ -694,6 +694,30 @@ def parse_args(args):
         default=1.0,
         help='The weighing factor for the embedding loss.',
     )
+    parser.add_argument(
+        '--clip-loss-temperature',
+        type=float,
+        default=0.07,
+        help='Initial temperature for CLIP loss.',
+    )
+    parser.add_argument(
+        '--infonce-loss-temperature',
+        type=float,
+        default=0.05,
+        help='Initial temperature for InfoNCE loss.',
+    )
+    parser.add_argument(
+        '--freeze-clip-loss-temperature',
+        default=False,
+        action='store_true',
+        help='Keep CLIP loss temperature frozen.',
+    )
+    parser.add_argument(
+        '--unify-batch',
+        default=False,
+        action='store_true',
+        help='Unify both text-image and text-text pairs in a single batch.',
+    )
     parser.add_argument('--local_rank', type=int, default=0)
 
     args = parser.parse_args(args)
