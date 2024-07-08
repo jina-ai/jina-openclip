@@ -39,11 +39,11 @@ class MatryoshkaOperator(nn.Module):
 
         for dim, weight in zip(self._dims, self._weights):
             _args = [
-                arg if i not in _tensor_args_idxs else arg[..., :dim]
+                arg if i not in _tensor_args_idxs else arg[..., :dim].contiguous()
                 for i, arg in enumerate(args)
             ]
             _kwargs = {
-                k: v if k not in _tensor_kwargs_idxs else v[..., :dim]
+                k: v if k not in _tensor_kwargs_idxs else v[..., :dim].contiguous()
                 for k, v in kwargs.items()
             }
             _composite_loss = self._loss(*_args, **_kwargs, output_dict=output_dict)
