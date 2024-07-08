@@ -2,10 +2,12 @@ import logging
 import os
 import shutil
 import sys
+import warnings
 from datetime import datetime
 
 import numpy as np
 import torch
+from loguru import logger
 
 try:
     import wandb
@@ -36,6 +38,9 @@ from training.utils import (
 )
 
 LATEST_CHECKPOINT_NAME = 'epoch-latest.pt'
+
+warnings.filterwarnings('ignore', category=UserWarning, module='torch.utils.checkpoint')
+warnings.filterwarnings('ignore', category=UserWarning, module='xformers.ops.fmha')
 
 
 def main(args):
@@ -81,7 +86,7 @@ def main(args):
         _log_filename = f'out-{args.rank}.log' if args.log_local else 'out.log'
         args.log_path = os.path.join(_log_base_path, _log_filename)
         if os.path.exists(args.log_path) and not _resume_latest:
-            logging.error(
+            logger.error(
                 f'Experiment {args.name} already exists. Use --name to '
                 'specify a new experiment.'
             )
@@ -89,7 +94,9 @@ def main(args):
 
     # setup logger
     args.log_level = logging.DEBUG if args.debug else logging.INFO
-    setup_logging(args.log_path, args.log_level, include_host=True)
+    setup_logging(
+        args.log_path, args.log_level, args.rank, include_host=True, include_rank=True
+    )
 
     # setup wandb, tensorboard, checkpoint logging
     args.wandb = 'wandb' in args.report_to or 'all' in args.report_to
@@ -114,13 +121,13 @@ def main(args):
         if args.remote_sync is not None:
             _checkpoint_path = os.path.join(args.remote_sync, args.name, 'checkpoints')
             if args.save_most_recent:
-                logging.error(
+                logger.error(
                     'Error. Cannot use save-most-recent with remote_sync and '
                     'resume latest.'
                 )
                 return -1
             if args.remote_sync_protocol != 's3':
-                logging.error(
+                logger.error(
                     'Error. Sync protocol not supported when using resume latest.'
                 )
                 return -1
@@ -142,9 +149,9 @@ def main(args):
                     _checkpoint_path, remote=args.remote_sync is not None
                 )
             if _resume_from:
-                logging.info(f'Found latest checkpoint: {_resume_from}.')
+                logger.info(f'Found latest checkpoint: {_resume_from}.')
             else:
-                logging.info(f'No latest checkpoint found in {_checkpoint_path}.')
+                logger.info(f'No latest checkpoint found in {_checkpoint_path}.')
 
         if args.distributed:
             # sync found checkpoint path to all ranks
@@ -158,7 +165,7 @@ def main(args):
     # start the sync proces if remote-sync is not None
     _remote_sync_process = None
     if is_master(args) and args.remote_sync is not None:
-        logging.info('Checking remote sync ...')
+        logger.info('Checking remote sync ...')
 
         # first make sure it works
         result = remote_sync(
@@ -167,9 +174,9 @@ def main(args):
             args.remote_sync_protocol,
         )
         if result:
-            logging.info('Remote sync successful')
+            logger.info('Remote sync successful')
         else:
-            logging.error('Error: remote sync failed, exiting ...')
+            logger.error('Error: remote sync failed, exiting ...')
             return -1
 
         # if all looks good, start a process to do this every
@@ -183,26 +190,26 @@ def main(args):
         _remote_sync_process.start()
 
     if args.precision == 'fp16':
-        logging.warning(
+        logger.warning(
             'It is recommended to use AMP mixed-precision instead of FP16. '
             'FP16 support needs further verification and tuning, especially for '
             'training.'
         )
 
     if args.horovod:
-        logging.info(
+        logger.info(
             f'Running in horovod mode with multiple processes / nodes. '
             f'Device: {args.device}. Process (global: {args.rank}, local '
             f'{args.local_rank}), total {args.world_size}.'
         )
     elif args.distributed:
-        logging.info(
+        logger.info(
             f'Running in distributed mode with multiple processes. '
             f'Device: {args.device}. Process (global: {args.rank}, local '
             f'{args.local_rank}), total {args.world_size}.'
         )
     else:
-        logging.info(f'Running with a single process, device {args.device}.')
+        logger.info(f'Running with a single process, device {args.device}.')
 
     distill_model = None
     args.distill = (
@@ -278,7 +285,7 @@ def main(args):
             output_dict=True,
         )
     if args.use_bnb_linear is not None:
-        logging.warning(
+        logger.warning(
             '=> using a layer from bitsandbytes.\n'
             '   this is an experimental feature which requires two extra pip installs\n'
             '   pip install bitsandbytes triton'
@@ -287,7 +294,7 @@ def main(args):
         import bitsandbytes as bnb
         from open_clip.utils import replace_linear
 
-        logging.debug(f'=> replacing linear layers with {args.use_bnb_linear}')
+        logger.debug(f'=> replacing linear layers with {args.use_bnb_linear}')
         _linear_replacement_cls = getattr(
             bnb.nn.triton_based_modules, args.use_bnb_linear
         )
@@ -313,13 +320,13 @@ def main(args):
 
     _params_file = ''
     if is_master(args):
-        logging.info(f'Model: {str(model)}')
-        logging.debug('Parameters:')
+        logger.info(f'Model: {str(model)}')
+        logger.debug('Parameters:')
         _params_file = os.path.join(args.logs, args.name, 'params.txt')
         with open(_params_file, 'w') as f:
             for name in sorted(vars(args)):
                 val = getattr(args, name)
-                logging.debug(f'  {name}: {val}')
+                logger.debug(f'  {name}: {val}')
                 f.write(f'{name}: {val}\n')
 
     if args.distributed and not (args.horovod or args.deepspeed):
@@ -366,14 +373,14 @@ def main(args):
                     _, client_states = model.load_checkpoint(
                         args.resume, tag=f'epoch-{_latest_ckpt}'
                     )
-                    logging.info(
+                    logger.info(
                         f"=> resuming from checkpoint '{args.resume}' "
                         f'(epoch {_latest_ckpt})'
                     )
                 else:
-                    logging.info(f"=> no checkpoint found at '{args.resume}'")
+                    logger.info(f"=> no checkpoint found at '{args.resume}'")
             else:
-                logging.info(f"=> '{args.resume}' does not exist!")
+                logger.info(f"=> '{args.resume}' does not exist!")
         else:
             checkpoint = pytorch_load(
                 os.path.join(args.resume, 'state.pt'), map_location='cpu'
@@ -394,14 +401,14 @@ def main(args):
                     optimizer.load_state_dict(checkpoint['optimizer'])
                 if scaler is not None and 'scaler' in checkpoint:
                     scaler.load_state_dict(checkpoint['scaler'])
-                logging.info(
+                logger.info(
                     f"=> resuming from checkpoint '{args.resume}' "
                     f'(epoch {start_epoch})'
                 )
             else:
                 # loading a bare (model only) checkpoint for fine-tune or evaluation
                 model.load_state_dict(checkpoint)
-                logging.info(
+                logger.info(
                     f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})"
                 )
 
@@ -451,7 +458,7 @@ def main(args):
     if args.wandb and is_master(args):
         assert wandb is not None, 'Please install wandb.'
 
-        logging.debug('Starting WandB ...')
+        logger.debug('Starting WandB ...')
         args.train_sz = data['train'].dataloader.num_samples
         if args.val_data is not None:
             args.val_sz = data['val'].dataloader.num_samples
@@ -470,14 +477,14 @@ def main(args):
             wandb.watch(model, log='all')
 
         wandb.save(_params_file)
-        logging.debug('Finished setting up WandB')
+        logger.debug('Finished setting up WandB')
 
     # Pytorch 2.0 adds '_orig_mod.' prefix to keys of state_dict() of compiled models.
     # For compatibility, we save state_dict() of the original model, which shares the
     # weights without the prefix.
     original_model = model
     if args.torchcompile:
-        logging.info('Compiling model ...')
+        logger.info('Compiling model ...')
         model = torch.compile(original_model)
 
     if 'train' not in data:
@@ -510,7 +517,7 @@ def main(args):
 
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):
-            logging.info(f'Starting epoch {epoch}')
+            logger.info(f'Starting epoch {epoch}')
 
         train_one_epoch(
             model,
@@ -613,16 +620,16 @@ def main(args):
     if _remote_sync_process is not None:
         _remote_sync_process.terminate()
 
-        logging.info('Final remote sync ...')
+        logger.info('Final remote sync ...')
         result = remote_sync(
             os.path.join(args.logs, args.name),
             os.path.join(args.remote_sync, args.name),
             args.remote_sync_protocol,
         )
         if result:
-            logging.info('Final remote sync successful')
+            logger.info('Final remote sync successful')
         else:
-            logging.info('Final remote sync failed')
+            logger.info('Final remote sync failed')
 
 
 if __name__ == '__main__':

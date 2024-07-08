@@ -463,8 +463,8 @@ _PRETRAINED = {
         large_merged2b_s4b_b131k=_pcfg(
             hf_hub='timm/eva02_large_patch14_clip_224.merged2b_s4b_b131k/'
         ),
-        B16=_pcfg(hf_hub='QuanSun/EVA-CLIP/EVA02_B_psz14to16.pt'),
-        L14=_pcfg(hf_hub='QuanSun/EVA-CLIP/EVA02_L_psz14.pt'),
+        b16=_pcfg(hf_hub='QuanSun/EVA-CLIP/EVA02_B_psz14to16.pt'),
+        l14=_pcfg(hf_hub='QuanSun/EVA-CLIP/EVA02_L_psz14.pt'),
     ),
     'ViT-B-16-SigLIP': dict(
         webli=_slpcfg(hf_hub='timm/ViT-B-16-SigLIP/'),

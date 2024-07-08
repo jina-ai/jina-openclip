@@ -1,8 +1,8 @@
-import logging
 from functools import partial
 from typing import Optional
 
 import numpy as np
+from loguru import logger
 from torch import optim
 
 
@@ -105,7 +105,7 @@ def create_scheduler(
             cooldown_end_lr=cooldown_end_lr,
         )
     else:
-        logging.error(
+        logger.error(
             f'Unknown scheduler, {scheduler_type}. Available options are: cosine, '
             f'const, const-cooldown'
         )

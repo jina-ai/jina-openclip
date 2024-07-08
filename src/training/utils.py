@@ -5,6 +5,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 import time
 from contextlib import suppress
 from typing import Optional
@@ -12,37 +13,37 @@ from typing import Optional
 import fsspec
 import numpy as np
 import torch
+from loguru import logger
 
 
 def setup_logging(
     logfile: Optional[str] = None,
     level: int = logging.INFO,
+    rank: int = 0,
     include_host: bool = False,
+    include_rank: bool = False,
 ):
+    extra = {'host': 'localhost', 'rank': 0}
     if include_host:
         import socket
 
-        hostname = socket.gethostname()
-        fmt = f'%(asctime)s |  {hostname} | %(levelname)s | %(message)s'
-    else:
-        fmt = '%(asctime)s | %(levelname)s | %(message)s'
+        extra['host'] = socket.gethostname()
+    
+    if include_rank:
+        extra['rank'] = rank
 
-    datefmt = '%Y-%m-%d,%H:%M:%S'
-    formatter = logging.Formatter(fmt, datefmt=datefmt)
-
-    logging.root.setLevel(level)
-    loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict]
-    for logger in loggers:
-        logger.setLevel(level)
-
-    streamhandler = logging.StreamHandler()
-    streamhandler.setFormatter(formatter)
-    logging.root.addHandler(streamhandler)
-
+    fmt = (
+        '<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | '
+        '<level>{level: <8}</level> | '
+        '<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | '
+        '<green>host={extra[host]} rank={extra[rank]}</green> | '
+        '<level>{message}</level>'
+    )
+    logger.configure(extra=extra)
+    logger.remove()
+    logger.add(sys.stderr, format=fmt, level=level, colorize=True)
     if logfile:
-        filehandler = logging.FileHandler(filename=logfile)
-        filehandler.setFormatter(formatter)
-        logging.root.addHandler(filehandler)
+        logger.add(logfile, format=fmt, level=level)
 
 
 def get_autocast(precision: str):
@@ -62,12 +63,12 @@ def _remote_sync_s3(localdir: str, remotedir: str) -> bool:
         stderr=subprocess.PIPE,
     )
     if result.returncode != 0:
-        logging.error(
+        logger.error(
             f'Error: Failed to sync with S3 bucket {result.stderr.decode("utf-8")}'
         )
         return False
 
-    logging.info('Successfully synced with S3 bucket')
+    logger.info('Successfully synced with S3 bucket')
     return True
 
 
@@ -81,29 +82,29 @@ def _remote_sync_fsspec(localdir: str, remotedir: str) -> bool:
         if 'epoch_latest.pt' in k:
             continue
 
-        logging.info(f'Attempting to sync {k}')
+        logger.info(f'Attempting to sync {k}')
         if k in b and len(a[k]) == len(b[k]):
-            logging.debug(f'Skipping remote sync for {k}.')
+            logger.debug(f'Skipping remote sync for {k}.')
             continue
 
         try:
-            logging.info(f'Successful sync for {k}.')
+            logger.info(f'Successful sync for {k}.')
             b[k] = a[k]
         except Exception as e:
-            logging.info(f'Error during remote sync for {k}: {e}')
+            logger.info(f'Error during remote sync for {k}: {e}')
             return False
 
     return True
 
 
 def remote_sync(localdir: str, remotedir: str, protocol: str = 's3') -> bool:
-    logging.info('Starting remote sync ...')
+    logger.info('Starting remote sync ...')
     if protocol == 's3':
         return _remote_sync_s3(localdir, remotedir)
     elif protocol == 'fsspec':
         return _remote_sync_fsspec(localdir, remotedir)
     else:
-        logging.error(f'Unknown remote protocol {protocol}')
+        logger.error(f'Unknown remote protocol {protocol}')
         return False
 
 
@@ -135,7 +136,7 @@ def pytorch_save(ptobj: object, filepath: str):
 
 def pytorch_load(filepath: str, map_location: Optional[str] = None):
     if filepath.startswith('s3'):
-        logging.info('Loading remote checkpoint, which may take a bit ...')
+        logger.info('Loading remote checkpoint, which may take a bit ...')
     of = fsspec.open(filepath, 'rb')
     with of as f:
         out = torch.load(f, map_location=map_location)

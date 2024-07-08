@@ -10,6 +10,7 @@ from enum import IntEnum
 from itertools import islice
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from loguru import logger
 from torch.utils.data import IterableDataset
 from training.data.utils import (
     SimLMCrossEncoder,
@@ -19,7 +20,6 @@ from training.data.utils import (
     get_directories,
     get_shard_size,
     get_shards,
-    log_on_rank,
 )
 
 csv.field_size_limit(sys.maxsize)
@@ -35,7 +35,21 @@ class InputType(IntEnum):
     TEXT_WITH_LABEL = 8
 
 
-def get_tuple_length(input_type: InputType):
+def _list_to_tuple(data):
+    if isinstance(data, list):
+        return tuple(_list_to_tuple(item) for item in data)
+    return data
+
+
+def _path_to_dir(pth: str) -> str:
+    return '/'.join(pth.split('/')[:-1])
+
+
+def _path_to_name(pth: str) -> str:
+    return pth.split('/')[-1]
+
+
+def get_tuple_length(input_type: Union[str, InputType]):
     if input_type in (InputType.PAIR, InputType.PAIR_WITH_SCORES):
         return 2
     elif input_type in (InputType.TRIPLET, InputType.SCORED_TRIPLET):
@@ -63,8 +77,8 @@ class S3Dataset(IterableDataset):
         dialect: Literal['csv', 'tsv'] = 'tsv',
         shard_num: int = 0,
         index: Optional[int] = None,
-        ce_model_name='intfloat/simlm-msmarco-reranker',
-        interleaved=False,
+        ce_model_name: str = 'intfloat/simlm-msmarco-reranker',
+        interleaved: bool = False,
         task_implementation: Literal['none', 'instruction-based'] = 'none',
     ):
         """A dataset that iterates through shards of a dataset stored
@@ -159,11 +173,11 @@ class S3Dataset(IterableDataset):
         else:
             self._num_pairs = 0
 
-        log_on_rank(
+        logger.debug(
             (
-                f'worker {rank}/{num_workers} taking shards {start_index} - '
-                f'{stop_index} for dataset {dataset}, total number of pairs: '
-                f'{self._num_pairs}'
+                f'Worker {rank}/{num_workers} processing shards {start_index} - '
+                f'{stop_index} for dataset {dataset}. '
+                f'Total number of pairs: {self._num_pairs}'
             )
         )
 
@@ -183,17 +197,13 @@ class S3Dataset(IterableDataset):
             return SimLMCrossEncoder(model_name=ce_model_name)
 
     def _get_ce_scores(self, query: str, pos: str, *negs: str):
-        scores = self._cross_encoder_model.predict(
+        return self._cross_encoder_model.predict(
             [(query, pos), *[(query, neg) for neg in negs]]
         )
-        return scores
 
     def _async_download_shard(self, shard_num: int):
         return self._thread_pool.submit(
-            download_shard,
-            self._bucket,
-            self._shards[shard_num],
-            self._tmpdir.name,
+            download_shard, self._bucket, self._shards[shard_num], self._tmpdir.name,
         )
 
     def __len__(self):
@@ -225,11 +235,10 @@ class S3Dataset(IterableDataset):
             elif shard_pth.endswith(f'.{self._dialect}'):
                 file = open(shard_pth, 'r')
             else:
-                raise ValueError(f'Shard {shard_pth} has unknown file extension.')
+                raise ValueError(f'Shard {shard_pth} has unknown file extension')
 
             reader = csv.reader(
-                file,
-                dialect='excel-tab' if self._dialect == 'tsv' else 'excel',
+                file, dialect='excel-tab' if self._dialect == 'tsv' else 'excel',
             )
 
             for row in islice(reader, self._current_index, None, self._stride):
@@ -258,40 +267,22 @@ class S3Dataset(IterableDataset):
                 if self._task_implementation == 'instruction-based':
                     out = add_instruction(out, task_type=self._task_type)
 
-                yield (
-                    self._dataset,
-                    (
-                        out,
-                        scores,
-                    ),
-                )
+                yield self._dataset, (out, scores)
+
             file.close()
 
             if not os.path.exists(self._bucket):  # local bucket
                 os.remove(shard_pth)
+
             self._current_index = self._rank if self._interleaved else 0
 
     def cleanup(self):
         if self._tmpdir is not None:
-            log_on_rank(f'Cleaning up dataset {self._dataset}')
+            logger.debug(f'Cleaning up dataset {self._dataset}')
             self._tmpdir.cleanup()
             self._tmpdir = None
             self._thread_pool.shutdown()
             self._thread_pool = None
-
-
-def _list_to_tuple(data):
-    if isinstance(data, list):
-        return tuple(_list_to_tuple(item) for item in data)
-    return data
-
-
-def _path_to_dir(pth: str) -> str:
-    return '/'.join(pth.split('/')[:-1])
-
-
-def _path_to_name(pth: str) -> str:
-    return pth.split('/')[-1]
 
 
 class MultiDataset(IterableDataset):
@@ -316,7 +307,8 @@ class MultiDataset(IterableDataset):
         synchronous: bool = False,
         **kwargs,
     ):
-        """A dataset that creates multiple S3 datasets and iterates over all of them at
+        """
+        A dataset that creates multiple S3 datasets and iterates over all of them at
         random.
 
         :param bucket: The name of the bucket where the data is stored.
@@ -410,7 +402,7 @@ class MultiDataset(IterableDataset):
             }
 
         self._sampling_rates = {
-            ds_path: len(dataset) for ds_path, dataset in self._datasets.items()
+            ds_path: float(len(dataset)) for ds_path, dataset in self._datasets.items()
         }
 
         if sampling_rates is not None:
@@ -467,7 +459,9 @@ class MultiDataset(IterableDataset):
                 try:
                     yield next(sources[dataset])
                 except StopIteration:
-                    log_on_rank(f'reached the end of dataset {dataset}, rebuilding')
+                    logger.debug(
+                        f'Reached the end of dataset {dataset}, rebuilding ...'
+                    )
                     self._datasets[dataset].cleanup()
                     self._datasets[dataset] = self.rebuild_dataset(
                         dataset, self._world_size, self._global_rank
@@ -479,6 +473,10 @@ class MultiDataset(IterableDataset):
 
     def __len__(self):
         return self._max_batches * self._batch_size
+
+    @property
+    def num_batches(self):
+        return self._num_batches
 
     def rebuild_dataset(self, dataset: str, world_size: int, global_rank: int):
         return S3Dataset(
@@ -549,13 +547,9 @@ class MultiDataset(IterableDataset):
                 json.dump(self.state_dict(), json_file)
         except Exception as e:
             _ = str(e)
-            log_on_rank('File already exist, skipping.')  # avoid race condition
+            logger.debug('File already exist, skipping')  # avoid race condition
 
     @classmethod
     def load_from_json(cls, fname: str, world_size: int, global_rank: int):
         with open(fname, 'r') as json_file:
             return cls.load_state_dict(json.load(json_file), world_size, global_rank)
-
-    @property
-    def num_batches(self):
-        return self._num_batches

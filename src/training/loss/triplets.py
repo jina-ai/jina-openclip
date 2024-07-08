@@ -138,10 +138,10 @@ class InfoNCEHardNegativeLoss(nn.Module):
         targets = torch.cat([positive_features, negative_features])
         labels = torch.arange(start=0, end=batchsize, device=anchor_features.device)
 
-        scores = logit_scale * anchor_features @ targets
+        scores = logit_scale * anchor_features @ targets.T
         loss = f.cross_entropy(scores, labels)
         if self._bidirectional:
-            scores = logit_scale * positive_features @ anchor_features
+            scores = logit_scale * positive_features @ anchor_features.T
             loss += f.cross_entropy(scores, labels)
             loss = loss / 2
 
@@ -216,7 +216,7 @@ class MultiCELoss(nn.Module):
                 torch.cat([_pos_score, _neg_scores]), dim=0
             )
             if self._beta > 0:
-                ce_scores = torch.nn.functional.softmax(torch.stack(scorerow))
+                ce_scores = torch.nn.functional.softmax(torch.stack(scorerow), dim=0)
                 _kl_loss = self._kl_loss(_emb_scores, ce_scores)
             else:
                 _kl_loss = 0.0
@@ -227,7 +227,7 @@ class MultiCELoss(nn.Module):
                 loss += self._beta * _kl_loss
 
             if not self._single_info_nce:
-                loss += self._alpha * self._info_nce_loss(
+                loss += self._alpha * self._infonce_loss(
                     embrow[0].unsqueeze(0),
                     embrow[1].unsqueeze(0),
                     embrow[2:],
@@ -315,7 +315,7 @@ class MatryoshkaMultiCELoss(MultiCELoss):
                     loss += self._beta * kl_loss
 
                 if not self._single_info_nce:
-                    loss += self._alpha * self._info_nce_loss(
+                    loss += self._alpha * self._infonce_loss(
                         anc,
                         pos,
                         neg,
@@ -338,4 +338,4 @@ class MatryoshkaMultiCELoss(MultiCELoss):
                 )
             weighted_loss += loss * weight
 
-        return weighted_loss
+        return {'contrastive_loss': weighted_loss} if output_dict else weighted_loss

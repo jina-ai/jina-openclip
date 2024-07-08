@@ -199,7 +199,12 @@ class HFTextEncoder(nn.Module):
                 hasattr(self.config, 'is_encoder_decoder')
                 and self.config.is_encoder_decoder
             ):
-                self.transformer = create_func(model_args)
+                self.transformer = create_func(
+                    model_args,
+                    trust_remote_code=trust_remote_code,
+                    add_pooling_layer=uses_transformer_pooler,
+                    code_revision=revision,
+                )
                 self.transformer = self.transformer.encoder
             else:
                 self.transformer = create_func(
@@ -211,7 +216,12 @@ class HFTextEncoder(nn.Module):
         else:
             self.config = config
             self.config.update(model_config_kwargs)
-            self.transformer = AutoModel.from_config(self.config)
+            self.transformer = AutoModel.from_config(
+                self.config,
+                trust_remote_code=trust_remote_code,
+                add_pooling_layer=uses_transformer_pooler,
+                code_revision=revision,
+            )
 
         if pooler_type is None:  # get default arch pooler
             pooler_type = _HF_ARCH_DICT[self.config.model_type]['pooler']
@@ -228,7 +238,7 @@ class HFTextEncoder(nn.Module):
         )
         if (d_model == output_dim) and (proj_type is None):  # do we always need a proj?
             self.proj = nn.Identity()
-        elif proj_type == 'linear':
+        elif (d_model != output_dim) or proj_type == 'linear':
             self.proj = nn.Linear(d_model, output_dim, bias=proj_bias)
         elif proj_type == 'mlp':
             hidden_size = (d_model + output_dim) // 2

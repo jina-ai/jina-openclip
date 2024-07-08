@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -94,7 +94,9 @@ class InfoNCELoss(nn.Module):
 
         return _all_features
 
-    def get_labels(self, device: str, batchsize: int) -> torch.Tensor:
+    def get_labels(
+        self, device: Union[str, torch.device], batchsize: int
+    ) -> torch.Tensor:
         if self._previous_batchsize != batchsize or device not in self._labels:
             labels = torch.arange(batchsize, device=device, dtype=torch.long)
             if self._world_size > 1 and self._local_loss:
@@ -159,10 +161,10 @@ class InfoNCELoss(nn.Module):
             right_features,
             logit_scale,
         )
-        labels = self.get_labels(left_features.device, left_features.shape[0])
+        labels = self.get_labels(left_features.device, left_logits.shape[0])
         loss = self.infonce(left_logits, right_logits, labels)
 
-        return loss if output_dict else {'contrastive_loss': loss}
+        return {'contrastive_loss': loss} if output_dict else loss
 
 
 class CoCaLoss(nn.Module):

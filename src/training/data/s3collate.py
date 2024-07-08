@@ -79,7 +79,7 @@ def flexible_collate_fn(
     ]
     # extract the cross encoder scores for each text pair
     scores = [
-        torch.tensor(s)
+        s.clone().detach()
         for (texts, scores), r in zip(batch, row_sizes)
         for s in [elem for elem in scores][: (r - 1)]
     ]

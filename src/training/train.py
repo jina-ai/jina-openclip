@@ -1,4 +1,3 @@
-import logging
 import math
 import time
 import warnings
@@ -6,6 +5,7 @@ from collections import defaultdict
 from itertools import islice
 
 import torch
+from loguru import logger
 
 try:
     import wandb
@@ -97,8 +97,17 @@ def train_one_epoch(
     data['train'].set_epoch(epoch)
     train_dataloader = data['train'].dataloader
 
-    train_s3_dataloader = data['train-s3'] or _DummyDataloader()
-    train_mtl_dataloader = data['train-mtl'] or _DummyDataloader()
+    train_s3_dataloader = data['train-s3']
+    if train_s3_dataloader is None:
+        train_s3_dataloader = _DummyDataloader()
+    else:
+        _, train_s3_dataloader = train_s3_dataloader
+
+    train_mtl_dataloader = data['train-mtl']
+    if train_mtl_dataloader is None:
+        train_mtl_dataloader = _DummyDataloader()
+    else:
+        _, train_mtl_dataloader = train_mtl_dataloader
 
     _num_batches_per_epoch = train_dataloader.num_batches // args.accum_freq
     _sample_digits = math.ceil(math.log(train_dataloader.num_samples + 1, 10))
@@ -117,7 +126,11 @@ def train_one_epoch(
     start = time.time()
 
     # training loop
-    for i, (batch, (_, (s3batch, _), (mtldataset, (mtlbatch, mtllabels)))) in enumerate(
+    for i, (
+        (images, texts),
+        (_, (s3batch, __)),
+        (mtldataset, (mtlbatch, mtllabels))
+    ) in enumerate(
         zip(
             train_dataloader,
             islice(train_s3_dataloader, 1, None),
@@ -130,20 +143,21 @@ def train_one_epoch(
         if not args.skip_scheduler:
             scheduler(step)
 
-        images, texts = batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
         alltexts = [texts]
         batch_size = texts.shape[0]
         s3_batch_size = 0
+        mtl_batch_size = 0
         if s3batch:
-            for b in s3batch:
-                b.to(device=device)
-                alltexts.append(b['input_ids'])
-            s3_batch_size = s3batch[0].shape[0]
+            s3_batch_size = s3batch[0]['input_ids'].shape[0] // 2
+            for sb in s3batch:
+                sb.to(device=device)
+                alltexts.append(sb['input_ids'])
         if mtlbatch:
-            for b in mtlbatch:
-                b.to(device=device)
+            mtl_batch_size = args.mtl_batch_size
+            for mb in mtlbatch:
+                mb.to(device=device)
         if mtllabels:
             mtllabels[0] = [label.to(device=device) for label in mtllabels[0]]
 
@@ -165,10 +179,16 @@ def train_one_epoch(
                 if args.distill:
                     with torch.no_grad():
                         distill_model_out = distill_model(images, alltexts)
-                    modelout.update(
-                        {f'distill_{k}': v for k, v in distill_model_out.items()}
-                    )
+                    modelout.update({
+                        'distill_left_features': distill_model_out[
+                            'distill_image_features'
+                        ],
+                        'distill_right_features': distill_model_out[
+                            'distill_text_features'
+                        ]
+                    })
                 modelout['output_dict'] = True
+                logit_scale = modelout['logit_scale']
                 image_features = modelout.pop('image_features')
                 text_features = modelout.pop('text_features')
                 left_features = torch.cat(
@@ -196,10 +216,16 @@ def train_one_epoch(
                     modelouts = [model(None, b['input_ids']) for b in mtlbatch]
                     mtlfeats = []
                     for out in modelouts:
-                        mtlfeats.append(out.pop('text_features'))
                         _ = out.pop('image_features')
+                        feats = out.pop('text_features')
+                        if len(mtllabels) == 0:
+                            mtlfeats.extend([
+                                feats[:mtl_batch_size], feats[mtl_batch_size:]
+                            ])
+                        else:
+                            mtlfeats.append(feats)
                     losskwargs = modelouts[0]
-                    losskwargs['output_dict'] = True
+                    losskwargs['output_dict'] = False
                     mtlloss = mtllossfn(*mtlfeats, *mtllabels, **losskwargs)
                     losses['mtl_loss'] = args.mtl_loss_weight * mtlloss
 
@@ -245,7 +271,10 @@ def train_one_epoch(
                             modelouts = [model(None, b['input_ids']) for b in mtlbatch]
                             mtlfeats = []
                             for out in modelouts:
-                                mtlfeats.append(out.pop('text_features'))
+                                feats = out.pop('text_features')
+                                mtlfeats.extend([
+                                    feats[:mtl_batch_size], feats[mtl_batch_size:]
+                                ])
                             accum_mtl_features.append(mtlfeats)
                         # else == triplet training
                         else:
@@ -253,7 +282,7 @@ def train_one_epoch(
 
                 accum_images.append(images)
                 accum_texts.append(alltexts)
-                if args.mtl:
+                if mtl_losses is not None:
                     accum_mtl_datasets.append(mtldataset)
                     accum_mtl_batches.append(mtlbatch)
 
@@ -349,9 +378,17 @@ def train_one_epoch(
                         }
                         if 'logit_bias' in modelouts[0]:
                             inputs_no_accum['logit_bias'] = modelout.pop('logit_bias')
+
                         mtlfeats = []
                         for out in modelouts:
-                            mtlfeats.append(out.pop('text_features'))
+                            _ = out.pop('image_features')
+                            feats = out.pop('text_features')
+                            if len(mtllabels) == 0:
+                                mtlfeats.extend([
+                                    feats[:mtl_batch_size], feats[mtl_batch_size:]
+                                ])
+                            else:
+                                mtlfeats.append(feats)
 
                         if len(accum_mtl_labels) == 0:
                             inputs = []
@@ -365,7 +402,7 @@ def train_one_epoch(
                                     )
                                 )
                             mtlloss = mtllossfn(
-                                *mtlfeats, **inputs_no_accum, output_dict=True
+                                *inputs, **inputs_no_accum, output_dict=False
                             )
                             del inputs
                         else:
@@ -374,7 +411,7 @@ def train_one_epoch(
                                 *mtlfeats,
                                 *mtllabels,
                                 **inputs_no_accum,
-                                output_dict=True,
+                                output_dict=False,
                             )
 
                         mtlloss = args.mtl_loss_weight * mtlloss
@@ -437,8 +474,16 @@ def train_one_epoch(
             i_accum % args.log_every_n_steps == 0
             or batch_count == _num_batches_per_epoch
         ):
-            batch_size = len(images)
             num_samples = batch_count * batch_size * args.accum_freq * args.world_size
+            num_s3_samples = (
+                batch_count * s3_batch_size * args.accum_freq * args.world_size
+            )
+            num_mtl_samples = (
+                batch_count * mtl_batch_size * args.accum_freq * args.world_size
+            )
+            num_contrastive_samples = num_samples + num_s3_samples
+            num_total_samples = num_contrastive_samples+ num_mtl_samples
+
             samples_per_epoch = train_dataloader.num_samples
             percent_complete = 100.0 * batch_count / _num_batches_per_epoch
 
@@ -449,48 +494,57 @@ def train_one_epoch(
                 losses_m[key].update(val.item(), batch_size)
 
             logit_scale_scalar = logit_scale.item()
+            temperature_scalar = 1 / logit_scale_scalar
+
             loss_log = ' - '.join(
                 [
-                    f'{loss_name.replace("_", " ")}: '
+                    f'{loss_name.replace("_", "-")}: '
                     f'{loss_m.val:#.5g} (avg {loss_m.avg:#.5g})'
                     for loss_name, loss_m in losses_m.items()
                 ]
             )
             samples_per_second = (
-                args.accum_freq * args.batch_size * args.world_size / _batch_time_m.val
+                args.accum_freq * (batch_size + mtl_batch_size) * args.world_size /
+                _batch_time_m.val
             )
             samples_per_second_per_gpu = (
-                args.accum_freq * args.batch_size / _batch_time_m.val
+                args.accum_freq * (batch_size + mtl_batch_size) / _batch_time_m.val
             )
-            logging.info(
+            last_layer_lr = optimizer.param_groups[-1]['lr']
+            first_layer_lr = optimizer.param_groups[0]['lr']
+
+            logger.info(
+                f'--------- STEP {step} \n'
                 f'Epoch: {epoch} [{num_samples:>{_sample_digits}}/'
                 f'{samples_per_epoch} ({percent_complete:.0f}%)] - '
-                f'Data Time: {_data_time_m.avg:.3f}s - '
-                f'Batch Time: {_batch_time_m.avg:.3f}s - '
-                f'Samples per Second: {samples_per_second:#g}/s, '
-                f'{samples_per_second_per_gpu:#g}/s/gpu - '
-                f'Last Layer LR: {optimizer.param_groups[-1]["lr"]:5f} - '
-                f'Logit Scale: {logit_scale_scalar:.3f} - '
-                f'LOSS | {loss_log}'
+                f'Total samples seen: {num_total_samples} ({num_contrastive_samples} '
+                f'contrastive & {num_mtl_samples} MTL)\n'
+                f'\tTimings: data {_data_time_m.avg:.3f}s '
+                f'batch {_batch_time_m.avg:.3f}s - '
+                f'Samples/s: {samples_per_second:#g}/s, '
+                f'{samples_per_second_per_gpu:#g}/s/gpu\n'
+                f'\tLR: first layer -> {first_layer_lr:5f} last layer -> '
+                f'{last_layer_lr:5f} - '
+                f'Logit scale: {logit_scale_scalar:.3f} '
+                f'(temperature {temperature_scalar:.3f})\n'
+                f'\tLosses: {loss_log}'
             )
 
             # Save train loss / etc. Using non avg meter values as loggers have
             # their own smoothing
             logdata = {
-                'data_time': _data_time_m.val,
-                'batch_time': _batch_time_m.val,
-                'samples_per_second': samples_per_second,
-                'samples_per_second_per_gpu': samples_per_second_per_gpu,
-                'scale': logit_scale_scalar,
+                'data-time': _data_time_m.val,
+                'batch-time': _batch_time_m.val,
+                'samples-per-second': samples_per_second,
+                'samples-per-second-per-gpu': samples_per_second_per_gpu,
+                'logit-scale': logit_scale_scalar,
+                'temperature': temperature_scalar,
+                'first-layer-lr': first_layer_lr,
+                'last-layer-lr': last_layer_lr,
             }
             logdata.update(
-                {
-                    f'lr/{pgroup["###logging_descriptor"]}': pgroup['lr']
-                    for pgroup in optimizer.param_groups
-                }
+                {name.replace('_', '-'): val.val for name, val in losses_m.items()}
             )
-            logdata.update({name: val.val for name, val in losses_m.items()})
-
             logdata = {'train/' + name: val for name, val in logdata.items()}
 
             if tb_writer is not None:
@@ -498,7 +552,7 @@ def train_one_epoch(
                     tb_writer.add_scalar(name, val, step)
 
             if args.wandb:
-                assert wandb is not None, 'Please install wandb.'
+                assert wandb is not None, 'Please install wandb'
                 logdata['step'] = step  # for backwards compatibility
                 wandb.log(logdata, step=step)
 

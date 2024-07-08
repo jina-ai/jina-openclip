@@ -9,7 +9,7 @@
         "mlp_ratio": 2.6667,
         "patch_dropout": 0.1,
         "eva_model_name": "EVA02",
-        "eva_pretrained":"B16",
+        "eva_pretrained": "B16",
         "drop_path_rate": 0.0,
         "xattn": true,
         "fusedLN": true,

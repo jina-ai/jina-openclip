@@ -1,6 +1,5 @@
 import ast
 import json
-import logging
 import math
 import os
 import random
@@ -15,6 +14,7 @@ import pandas as pd
 import torch
 import torchvision.datasets as datasets
 import webdataset as wds
+from loguru import logger
 from PIL import Image
 from torch.utils.data import (
     DataLoader,
@@ -143,7 +143,7 @@ def filter_no_caption_or_no_image(sample: Dict[str, Any]):
 
 
 def log_and_continue(exn):
-    logging.warning(f'Handling webdataset error ({repr(exn)}). Ignoring')
+    logger.warning(f'Handling webdataset error ({repr(exn)}). Ignoring')
     return True
 
 
@@ -181,7 +181,7 @@ def group_by_keys_nothrow(data, keys=base_plus_ext, lcase=True, suffixes=None, _
 def tarfile_to_samples_nothrow(src, handler=log_and_continue):
     streams = url_opener(src, handler=handler)
     files = tar_file_expander(streams, handler=handler)
-    samples = group_by_keys_nothrow(files, handler=handler)
+    samples = group_by_keys_nothrow(files)
     return samples
 
 
@@ -324,13 +324,13 @@ class _CSVDataset(Dataset):
     def __init__(
         self, input_filename, transforms, img_key, caption_key, sep='\t', tokenizer=None
     ):
-        logging.debug(f'Loading csv data from {input_filename}.')
+        logger.debug(f'Loading CSV data from {input_filename}.')
         df = pd.read_csv(input_filename, sep=sep)
 
         self.images = df[img_key].tolist()
         self.captions = df[caption_key].tolist()
         self.transforms = transforms
-        logging.debug('Done loading data.')
+        logger.debug('Done loading data.')
 
         self.tokenize = tokenizer
 

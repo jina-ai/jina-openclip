@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 from collections.abc import MutableMapping
 from typing import Any, Union
@@ -7,6 +6,7 @@ from typing import Any, Union
 import numpy as np
 import torch
 import torch.nn.functional as f
+from loguru import logger
 from tqdm import tqdm
 
 try:
@@ -62,8 +62,8 @@ def _run_validation(model, data, epoch, args):
     ):
         return {}
 
-    logging.info('--------------------------------------------------------------------')
-    logging.info('Starting evaluation on the validation set ...')
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting evaluation on the validation set ...')
 
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
@@ -76,13 +76,13 @@ def _run_validation(model, data, epoch, args):
     # FIXME this does not scale past small eval datasets
     # all_image_features @ all_text_features will blow up memory and compute
     # very quickly
-    cumulative_loss: torch.Tensor = torch.tensor([0.0])
-    cumulative_gen_loss: torch.Tensor = torch.tensor([0.0])
+    cumulative_loss = 0.0
+    cumulative_gen_loss = 0.0
     all_image_features, all_text_features = [], []
 
     metrics = {}
 
-    logging.info('Infering text and image features ...')
+    logger.info('Infering text and image features ...')
 
     with torch.no_grad():
         for i, batch in enumerate(dataloader):
@@ -116,19 +116,19 @@ def _run_validation(model, data, epoch, args):
             cumulative_loss += total_loss * batch_size
             num_samples += batch_size
             if is_master(args) and (i % 100) == 0:
-                logging.info(
+                logger.info(
                     f'Eval epoch: {epoch} [{num_samples} / {samples_per_val}]\t'
                     f'Clip loss: {cumulative_loss / num_samples:.6f}\t'
                 )
 
                 if gen_loss is not None:
                     cumulative_gen_loss += gen_loss * batch_size
-                    logging.info(
+                    logger.info(
                         f'Generative loss: '
                         f'{cumulative_gen_loss / num_samples:.6f}\t'
                     )
 
-        logging.info('Calculating CLIP metrics, mean/median rank and recall ...')
+        logger.info('Calculating CLIP metrics, mean/median rank and recall ...')
 
         val_metrics = _get_clip_metrics(
             image_features=torch.cat(all_image_features),
@@ -141,8 +141,8 @@ def _run_validation(model, data, epoch, args):
             gen_loss = cumulative_gen_loss / num_samples
             metrics.update({'generative-loss': gen_loss.item()})
 
-    logging.info('Finished!')
-    logging.info('--------------------------------------------------------------------')
+    logger.info('Finished!')
+    logger.info('--------------------------------------------------------------------')
 
     return metrics
 
@@ -196,12 +196,12 @@ def _run_zeroshot_evaluation(model, data, epoch, args, tokenizer=None):
     if args.distributed and not args.horovod:
         model = model.module
 
-    logging.info('--------------------------------------------------------------------')
-    logging.info('Starting zero-shot evaluation on ImageNet ...')
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting zero-shot evaluation on ImageNet ...')
     if tokenizer is None:
         tokenizer = get_tokenizer(args.model)
 
-    logging.info('Building zero-shot classifier ...')
+    logger.info('Building zero-shot classifier ...')
     autocast = get_autocast(args.precision)
     with autocast():
         classifier = build_zero_shot_classifier(
@@ -214,7 +214,7 @@ def _run_zeroshot_evaluation(model, data, epoch, args, tokenizer=None):
             use_tqdm=True,
         )
 
-    logging.info('Using classifier ...')
+    logger.info('Using classifier ...')
     results = {}
     if 'imagenet-val' in data:
         top1, top5 = _run_classifier(
@@ -229,8 +229,8 @@ def _run_zeroshot_evaluation(model, data, epoch, args, tokenizer=None):
         results['imagenetv2-zeroshot-top1'] = top1
         results['imagenetv2-zeroshot-top5'] = top5
 
-    logging.info('Finished zero-shot evaluation!')
-    logging.info('--------------------------------------------------------------------')
+    logger.info('Finished zero-shot evaluation!')
+    logger.info('--------------------------------------------------------------------')
 
     return results
 
@@ -241,8 +241,8 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
     ):
         return {}
 
-    logging.info('--------------------------------------------------------------------')
-    logging.info('Starting the CLIP benchmark ...')
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting the CLIP benchmark ...')
 
     from clip_benchmark.run import CLIPBenchmarkModel, run_benchmark
 
@@ -274,11 +274,12 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
     metrics = {}
     for result in results:
         dataset = result['dataset']
+        language = result['language']
         for k, v in result['metrics'].items():
-            metrics[f'{dataset}-{k}'] = v
+            metrics[f'{dataset}-{language}-{k}'] = v
 
-    logging.info('Finished CLIP benchmark!')
-    logging.info('--------------------------------------------------------------------')
+    logger.info('Finished CLIP benchmark!')
+    logger.info('--------------------------------------------------------------------')
 
     return metrics
 
@@ -289,11 +290,11 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     ):
         return {}
 
-    logging.info('--------------------------------------------------------------------')
-    logging.info('Starting the MTEB benchmark ...')
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting the MTEB benchmark ...')
 
     from mteb import MTEB
-    from open_clip.model import CLIP
+    from open_clip.model import CLIP, CustomTextCLIP
     from transformers import AutoTokenizer
 
     class _MTEBModel(torch.nn.Module):
@@ -320,7 +321,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
 
             self._model = _model
 
-            if isinstance(_model, CLIP):
+            if isinstance(_model, CLIP) or isinstance(_model, CustomTextCLIP):
                 assert _tokenizer is not None
                 self._tokenizer = _tokenizer
                 self._embed = self._clip_embed
@@ -388,7 +389,6 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     _mteb_model = _MTEBModel(
         clip_model=model,
         _tokenizer=tokenizer,
-        hf_tokenizer_name=args.mteb_tokenizer_name,
         max_seq_length=args.mteb_max_sequence_length,
         device=args.device,
     )
@@ -414,8 +414,8 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
                 }
             )
 
-    logging.info('Finished MTEB benchmark!')
-    logging.info('--------------------------------------------------------------------')
+    logger.info('Finished MTEB benchmark!')
+    logger.info('--------------------------------------------------------------------')
 
     return metrics
 
@@ -435,7 +435,7 @@ def evaluate(
 
     model.eval()
 
-    logging.info('--------------------------- EVALUATION -----------------------------')
+    logger.info('--------------------------- EVALUATION -----------------------------')
 
     zero_shot_metrics = _run_zeroshot_evaluation(
         model, data, epoch, args, tokenizer=tokenizer
@@ -456,7 +456,7 @@ def evaluate(
     if not metrics:
         return {}
 
-    logging.info(
+    logger.info(
         f'Eval epoch: {epoch} '
         + '\t'.join([f'{k}: {round(v, 4):.4f}' for k, v in metrics.items()])
     )
@@ -482,6 +482,6 @@ def evaluate(
         logdata['epoch'] = epoch
         wandb.log(logdata, step=step)
 
-    logging.info('------------------------------ DONE --------------------------------')
+    logger.info('------------------------------ DONE --------------------------------')
 
     return metrics

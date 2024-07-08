@@ -1,9 +1,9 @@
 import json
-import logging
 import os
 from functools import partial
 from typing import Any, Dict, List, Optional, Union
 
+from loguru import logger
 from torch.utils.data import DataLoader
 from training.data import (
     InputType,
@@ -29,7 +29,9 @@ DEFAULT_CONTEXT_LENGTH = 77
 
 
 def _create_contrastive_loss(args):
+    logger.info('Creating the contrastive loss ...')
     if args.distill:
+        logger.debug(f'Loss class: {DistillInfoNCELoss.__name__}')
         return DistillInfoNCELoss(
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
@@ -39,6 +41,7 @@ def _create_contrastive_loss(args):
             use_horovod=args.horovod,
         )
     elif 'coca' in args.model.lower():
+        logger.debug(f'Loss class: {CoCaLoss.__name__}')
         return CoCaLoss(
             caption_loss_weight=args.coca_caption_loss_weight,
             clip_loss_weight=args.coca_contrastive_loss_weight,
@@ -50,6 +53,7 @@ def _create_contrastive_loss(args):
             use_horovod=args.horovod,
         )
     elif '3towers' in args.model.lower():
+        logger.debug(f'Loss class: {ThreeTowersLoss.__name__}')
         return ThreeTowersLoss(
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
@@ -62,10 +66,14 @@ def _create_contrastive_loss(args):
     if args.siglip:
         assert not args.horovod, 'Horovod not currently supported for SigLIP'
         if args.matryoshka:
+            logger.debug(f'Loss class: {MatryoshkaSigLIPLoss.__name__}')
             return MatryoshkaSigLIPLoss(rank=args.rank, world_size=args.world_size)
+
+        logger.debug(f'Loss class: {SigLIPLoss.__name__}')
         return SigLIPLoss(rank=args.rank, world_size=args.world_size)
 
     if args.matryoshka:
+        logger.debug(f'Loss class: {MatryoshkaInfoNCELoss.__name__}')
         return MatryoshkaInfoNCELoss(
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
@@ -75,6 +83,7 @@ def _create_contrastive_loss(args):
             use_horovod=args.horovod,
         )
 
+    logger.debug(f'Loss class: {InfoNCELoss.__name__}')
     return InfoNCELoss(
         local_loss=args.local_loss,
         gather_with_grad=args.gather_with_grad,
@@ -105,7 +114,7 @@ def _create_mtl_losses(args):
     losses = {}
     for d in lossinit:
         for task in d['tasks']:
-            logging.debug(f'Setting up loss: {d["name"].__name__}')
+            logger.debug(f'Setting up loss: {d["name"].__name__}')
             lossfn = d['name'](**d['options'])
             losses[task] = lossfn
 
@@ -148,7 +157,7 @@ def _create_multimodal_dataloader(
             num_samples=args.train_num_samples,
             is_train=True,
             tokenizer=tokenizer,
-            upsampling_factors=args.train_upsampling_factors,
+            upsampling_factors=args.train_data_upsampling_factors,
             workers=args.workers,
             batch_size=batch_size,
             seed=args.seed,
@@ -244,7 +253,7 @@ def _create_s3_dataloader(
     if resume:
         checkpoint = os.path.join(resume, f'worker{rank}-{prefix}-dataset.json')
         if os.path.isfile(checkpoint):
-            logging.debug(f'Loading from checkpoint {checkpoint} ...')
+            logger.debug(f'Loading from checkpoint {checkpoint} ...')
             dataset = MultiDataset.load_from_json(
                 checkpoint,
                 world_size=world_size,
@@ -252,7 +261,7 @@ def _create_s3_dataloader(
             )
 
     if dataset is None:
-        logging.debug(f'Bucket: {bucket}, Datasets: {datasets}')
+        logger.debug(f'Bucket: {bucket}, Datasets: {datasets}')
         sampling_rates = (
             {dataset: sr for dataset, sr in zip(datasets, sampling_rates)}
             if sampling_rates
@@ -273,7 +282,7 @@ def _create_s3_dataloader(
             synchronous=True,
         )
 
-    logging.debug('Setting up the S3 dataloader')
+    logger.debug('Setting up the S3 dataloader')
 
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer, force_download=True)
@@ -297,14 +306,6 @@ def _create_s3_dataloader(
     return dataset, dataloader
 
 
-class _DummyDataloader:
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        return None, (None, None)
-
-
 def create_losses(args):
     loss = _create_contrastive_loss(args)
     mtllosses = None
@@ -321,7 +322,7 @@ def create_dataloaders(
     tokenizer: Any,
     mtl_losses: Optional[Dict[str, Any]] = None,
 ):
-    logging.info('Creating the multimodal dataloaders ...')
+    logger.info('Creating the multimodal dataloader ...')
     batch_size = args.batch_size
     s3_batch_size = 0
 
@@ -329,7 +330,7 @@ def create_dataloaders(
         s3_batch_size = batch_size // 2
         batch_size = batch_size - s3_batch_size
 
-    logging.debug(f'Batch size: {batch_size}')
+    logger.debug(f'Batch size: {batch_size}')
     data = _create_multimodal_dataloader(
         args=args,
         preprocess_train=preprocess_train,
@@ -340,8 +341,8 @@ def create_dataloaders(
     )
 
     if args.train_data_s3:
-        logging.info('Creating the S3 dataloader ...')
-        logging.debug(f'Batch size: {s3_batch_size}')
+        logger.info('Creating the S3 dataloader ...')
+        logger.debug(f'Batch size: {s3_batch_size}')
         assert isinstance(tokenizer.tokenizer, PreTrainedTokenizer) or isinstance(
             tokenizer.tokenizer, PreTrainedTokenizerFast
         )
@@ -371,8 +372,8 @@ def create_dataloaders(
         data['train-s3'] = None
 
     if args.train_data_mtl:
-        logging.info('Creating the MTL dataloader ...')
-        logging.debug(f'Batch size: {args.mtl_batch_size}')
+        logger.info('Creating the MTL dataloader ...')
+        logger.debug(f'Batch size: {args.mtl_batch_size}')
         assert isinstance(tokenizer.tokenizer, PreTrainedTokenizer) or isinstance(
             tokenizer.tokenizer, PreTrainedTokenizerFast
         )

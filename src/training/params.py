@@ -272,8 +272,8 @@ def parse_args(args):
     )
     parser.add_argument(
         '--use-bnb-linear',
-        default=False,
-        action='store_true',
+        default=None,
+        type=str,
         help=(
             'Replaces the network linear layers from the bitsandbytes library. '
             'Allows for int8 training/inference, etc.'

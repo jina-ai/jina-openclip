@@ -5,7 +5,6 @@ Copyright (c) 2021 OpenAI.
 """
 
 import copy
-import logging
 import math
 from dataclasses import dataclass
 from functools import partial
@@ -15,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn.functional as F
+from loguru import logger
 from torch import nn
 
 from .eva_model import EVAVisionTransformer
@@ -364,7 +364,7 @@ def _build_vision_tower(
                     f"No checkpoint for model '{_model_name}' found neither locally "
                     f'nor remotely'
                 )
-                logging.exception(_error_str)
+                logger.exception(_error_str)
                 raise RuntimeError(_error_str)
 
     elif isinstance(vision_cfg.layers, (tuple, list)):
@@ -413,7 +413,7 @@ def _build_vision_tower(
 
         ckpt = vision_cfg.pt_model_name
         if ckpt is not None:
-            logging.info(f'Downloading pretrained model {ckpt} ...')
+            logger.info(f'Downloading pretrained model {ckpt} ...')
             _model, _tag = ckpt.split(' ')
             _ckpt_path = download_pretrained(
                 get_pretrained_cfg(model=_model, tag=_tag), cache_dir=cache_dir
@@ -423,7 +423,7 @@ def _build_vision_tower(
                 if visual.proj is None or vision_cfg.pt_proj_exclude:
                     exclude.append('proj')
 
-                logging.info(f'Loading pretrained model from {_ckpt_path} ...')
+                logger.info(f'Loading pretrained model from {_ckpt_path} ...')
                 load_checkpoint(
                     visual, _ckpt_path, strict=False, root='visual', exclude=exclude
                 )
@@ -432,7 +432,7 @@ def _build_vision_tower(
                     f"No checkpoint for model '{ckpt}' found neither locally nor "
                     f'remotely'
                 )
-                logging.exception(_error_str)
+                logger.exception(_error_str)
                 raise RuntimeError(_error_str)
 
     return visual
@@ -494,7 +494,7 @@ def _build_text_tower(
 
         ckpt = text_cfg.pt_model_name
         if ckpt is not None:
-            logging.info(f'Downloading pretrained model {ckpt} ...')
+            logger.info(f'Downloading pretrained model {ckpt} ...')
             _model, _tag = ckpt.split(' ')
             _ckpt_path = download_pretrained(
                 get_pretrained_cfg(model=_model, tag=_tag), cache_dir=cache_dir
@@ -504,7 +504,7 @@ def _build_text_tower(
                 if text.text_projection is None or text_cfg.pt_proj_exclude:
                     exclude.append('text_projection')
 
-                logging.info(f'Loading pretrained model from {_ckpt_path} ...')
+                logger.info(f'Loading pretrained model from {_ckpt_path} ...')
                 load_checkpoint(
                     text, _ckpt_path, strict=False, root='text', exclude=exclude
                 )
@@ -513,7 +513,7 @@ def _build_text_tower(
                     f'No checkpoint for model {ckpt} found neither locally nor '
                     f'remotely'
                 )
-                logging.exception(_error_str)
+                logger.exception(_error_str)
                 raise RuntimeError(_error_str)
     return text
 
@@ -923,7 +923,7 @@ def resize_pos_embed(
         pos_emb_tok, pos_emb_img = None, old_pos_embed
     old_grid_size = to_2tuple(int(math.sqrt(len(pos_emb_img))))
 
-    logging.info(
+    logger.info(
         'Resizing position embedding grid-size from %s to %s', old_grid_size, grid_size
     )
     pos_emb_img = pos_emb_img.reshape(
@@ -965,7 +965,7 @@ def resize_text_pos_embed(
     if old_num_pos == num_pos:
         return
 
-    logging.info(
+    logger.info(
         'Resizing text position embedding num_pos from %s to %s', old_num_pos, num_pos
     )
     old_pos_embed = old_pos_embed.reshape(1, old_num_pos, old_width).permute(0, 2, 1)

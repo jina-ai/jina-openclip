@@ -316,6 +316,21 @@ def build_dataset(
             shell=True,
         )
 
+    if language != 'en':
+        if dataset_name not in {
+            'babel_imagenet',
+            'multilingual_mscoco_captions',
+            'flickr30k',
+            'flickr8k',
+            'crossmodal3600',
+            'xtd200',
+            'flickr30k-200'
+        }:
+            raise LanguageNotSupportedError(
+                f"Language '{language}' not supported for '{dataset_name}'"
+            )
+
+
     train = split == 'train'
     if dataset_name == 'cifar10':
         assert split in (

@@ -11,8 +11,6 @@ import boto3
 import torch
 from aiohttp import ClientError
 from loguru import logger
-from torch.distributed import get_rank as torch_get_rank
-from training.distributed import is_using_distributed
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -35,20 +33,6 @@ INSTRUCTION_CONFIG = MappingProxyType(
         ),
     }
 )
-
-
-def get_rank(group=None):
-    if is_using_distributed():
-        return torch_get_rank(group)
-    return 0
-
-
-def log_on_rank(message):
-    try:
-        rank = get_rank()
-        logger.debug(f'[rank={rank}]{message}')
-    except RuntimeError:
-        logger.debug(message)
 
 
 class SimLMCrossEncoder:
@@ -106,7 +90,7 @@ def get_shards(dataset: str, bucket_name: str, directory: Optional[str] = None):
                 if shard['Key'] != f'{directory}/{dataset}/'
             ]
         except KeyError as e:
-            log_on_rank(f'KEY ERROR: {dataset}')
+            logger.debug(f'KEY ERROR: {dataset}')
             raise e
 
     return shards
@@ -144,7 +128,7 @@ def get_dataset_info(bucket_name, directory: Optional[str] = None):
     try:
         tags = get_tags(bucket_name, directory)
     except Exception as _:
-        log_on_rank(f'Could not retrieve size values for {bucket_name}/{directory}')
+        logger.debug(f'Could not retrieve size values for {bucket_name}/{directory}')
         tags = {}
     dataset_dict = {}
     for dataset in datasets:
@@ -166,7 +150,7 @@ def download_shard(
         return target_path
     elif os.path.exists(shard):
         return shard
-    log_on_rank(f'Downloading shard {shard} from {source_bucket}')
+    logger.debug(f'Downloading shard {shard} from {source_bucket}')
     s3_client.download_file(
         Bucket=source_bucket,
         Key=shard,
@@ -209,14 +193,11 @@ def get_directories(path: str):
 
 
 def lookahead(f):
-    lookahead.future = None
-    thread_pool = ThreadPoolExecutor(max_workers=1)
+    pool = ThreadPoolExecutor(max_workers=1)
 
     def g(*args, **kwargs):
-        future = thread_pool.submit(f, *args, **kwargs)
-        result = lookahead.future.result() if lookahead.future is not None else None
-        lookahead.future = future
-        return result
+        future = pool.submit(f, *args, **kwargs)
+        return future.result() if future is not None else None
 
     return g
 
