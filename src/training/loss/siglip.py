@@ -1,4 +1,4 @@
-from typing import Optional, Sequence
+from typing import Optional
 
 import torch
 from torch import nn
@@ -223,48 +223,5 @@ class SigLIPLoss(nn.Module):
                         negative_only=True,
                     )
                     right_features_to_right = right_features_from_left
-
-        return {'contrastive_loss': loss} if output_dict else loss
-
-
-class MatryoshkaSigLIPLoss(SigLIPLoss):
-    def __init__(
-        self,
-        temperature: float = 0.05,
-        logit_bias: Optional[torch.Tensor] = None,
-        bidirectional: bool = True,
-        rank: int = 0,
-        world_size: int = 1,
-        dims: Sequence[int] = (16, 32, 64, 128, 256, 512),
-        weights: Optional[Sequence[int]] = None,
-    ):
-        super().__init__(
-            temperature=temperature,
-            bidirectional=bidirectional,
-            logit_bias=logit_bias,
-            rank=rank,
-            world_size=world_size,
-        )
-        if weights:
-            assert len(weights) == len(dims)
-        self._dims = dims
-        self._weights = weights if weights else [1] * len(self._dims)
-
-    def forward(
-        self,
-        left_features: torch.Tensor,
-        right_features: torch.Tensor,
-        logit_scale: Optional[torch.Tensor] = None,
-        logit_bias: Optional[torch.Tensor] = None,
-        output_dict: bool = False,
-    ):
-        loss = 0.0
-        for dim, weight in zip(self._dims, self._weights):
-            _left_composites = left_features[..., :dim]
-            _right_composites = right_features[..., :dim]
-            _composite_loss = super().forward(
-                left_features, right_features, logit_scale, output_dict=False
-            )
-            loss += _composite_loss * weight
 
         return {'contrastive_loss': loss} if output_dict else loss

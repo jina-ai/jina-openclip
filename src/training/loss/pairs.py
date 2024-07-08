@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -283,51 +283,3 @@ class ThreeTowersLoss(nn.Module):
         if output_dict:
             return {'contrastive_loss': loss}
         return loss
-
-
-class MatryoshkaInfoNCELoss(InfoNCELoss):
-    def __init__(
-        self,
-        temperature: float = 0.05,
-        bidirectional: bool = True,
-        local_loss: bool = False,
-        gather_with_grad: bool = False,
-        cache_labels: bool = False,
-        rank: int = 0,
-        world_size: int = 1,
-        use_horovod: bool = False,
-        dims: Sequence[int] = (16, 32, 64, 128, 256, 512),
-        weights: Optional[Sequence[int]] = None,
-    ):
-        super().__init__(
-            temperature=temperature,
-            bidirectional=bidirectional,
-            local_loss=local_loss,
-            gather_with_grad=gather_with_grad,
-            cache_labels=cache_labels,
-            rank=rank,
-            world_size=world_size,
-            use_horovod=use_horovod,
-        )
-        if weights:
-            assert len(weights) == len(dims)
-        self._dims = dims
-        self._weights = weights if weights else [1] * len(self._dims)
-
-    def forward(
-        self,
-        left_features: torch.Tensor,
-        right_features: torch.Tensor,
-        logit_scale: Optional[torch.Tensor] = None,
-        output_dict: bool = False,
-    ):
-        loss = 0.0
-        for dim, weight in zip(self._dims, self._weights):
-            _left_composites = left_features[..., :dim]
-            _right_composites = right_features[..., :dim]
-            _composite_loss = super().forward(
-                left_features, right_features, logit_scale, output_dict=False
-            )
-            loss += _composite_loss * weight
-
-        return {'contrastive_loss': loss} if output_dict else loss

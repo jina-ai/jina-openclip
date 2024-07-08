@@ -461,6 +461,18 @@ def parse_args(args):
         help='Use Matryoshka loss.',
     )
     parser.add_argument(
+        '--matryoshka-dims',
+        default='16,32,64,128,256,512',
+        type=str,
+        help='Matryoshka loss component dimensions.',
+    )
+    parser.add_argument(
+        '--matryoshka-weights',
+        default=None,
+        type=str,
+        help='Matryoshka loss component weights.',
+    )
+    parser.add_argument(
         '--temperature',
         default=None,
         type=float,

@@ -18,8 +18,7 @@ from training.loss import (
     CoCaLoss,
     DistillInfoNCELoss,
     InfoNCELoss,
-    MatryoshkaInfoNCELoss,
-    MatryoshkaSigLIPLoss,
+    MatryoshkaOperator,
     SigLIPLoss,
     ThreeTowersLoss,
 )
@@ -32,7 +31,7 @@ def _create_contrastive_loss(args):
     logger.info('Creating the contrastive loss ...')
     if args.distill:
         logger.debug(f'Loss class: {DistillInfoNCELoss.__name__}')
-        return DistillInfoNCELoss(
+        loss = DistillInfoNCELoss(
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
             cache_labels=True,
@@ -42,7 +41,7 @@ def _create_contrastive_loss(args):
         )
     elif 'coca' in args.model.lower():
         logger.debug(f'Loss class: {CoCaLoss.__name__}')
-        return CoCaLoss(
+        loss = CoCaLoss(
             caption_loss_weight=args.coca_caption_loss_weight,
             clip_loss_weight=args.coca_contrastive_loss_weight,
             local_loss=args.local_loss,
@@ -54,7 +53,7 @@ def _create_contrastive_loss(args):
         )
     elif '3towers' in args.model.lower():
         logger.debug(f'Loss class: {ThreeTowersLoss.__name__}')
-        return ThreeTowersLoss(
+        loss = ThreeTowersLoss(
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
             cache_labels=True,
@@ -62,19 +61,14 @@ def _create_contrastive_loss(args):
             world_size=args.world_size,
             use_horovod=args.horovod,
         )
-
-    if args.siglip:
+    elif args.siglip:
         assert not args.horovod, 'Horovod not currently supported for SigLIP'
-        if args.matryoshka:
-            logger.debug(f'Loss class: {MatryoshkaSigLIPLoss.__name__}')
-            return MatryoshkaSigLIPLoss(rank=args.rank, world_size=args.world_size)
 
         logger.debug(f'Loss class: {SigLIPLoss.__name__}')
-        return SigLIPLoss(rank=args.rank, world_size=args.world_size)
-
-    if args.matryoshka:
-        logger.debug(f'Loss class: {MatryoshkaInfoNCELoss.__name__}')
-        return MatryoshkaInfoNCELoss(
+        loss = SigLIPLoss(rank=args.rank, world_size=args.world_size)
+    else:
+        logger.debug(f'Loss class: {InfoNCELoss.__name__}')
+        loss = InfoNCELoss(
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,
             cache_labels=True,
@@ -83,15 +77,16 @@ def _create_contrastive_loss(args):
             use_horovod=args.horovod,
         )
 
-    logger.debug(f'Loss class: {InfoNCELoss.__name__}')
-    return InfoNCELoss(
-        local_loss=args.local_loss,
-        gather_with_grad=args.gather_with_grad,
-        cache_labels=True,
-        rank=args.rank,
-        world_size=args.world_size,
-        use_horovod=args.horovod,
-    )
+    if args.matryoshka:
+        dims = [int(dim) for dim in args.matryoshka_dims.split(',')]
+        weights = (
+            [float(weight) for weight in args.matryoshka_weights.split(',')]
+            if args.matryoshka_weights else None
+        )
+        logger.info(f'Using Matryoshka with dims: {dims} and weights: {weights}')
+        return MatryoshkaOperator(loss=loss, dims=dims, weights=weights)
+
+    return loss
 
 
 def _create_mtl_losses(args):
@@ -111,11 +106,22 @@ def _create_mtl_losses(args):
         if 'options' not in d:
             d['options'] = {}
 
+    dims, weights = [], []
+    if args.matryoshka:
+        dims = [int(dim) for dim in args.matryoshka_dims.split(',')]
+        weights = (
+            [float(weight) for weight in args.matryoshka_weights.split(',')]
+            if args.matryoshka_weights else None
+        )
+        logger.info(f'Using Matryoshka with dims: {dims} and weights: {weights}')
+
     losses = {}
     for d in lossinit:
         for task in d['tasks']:
             logger.debug(f'Setting up loss: {d["name"].__name__}')
             lossfn = d['name'](**d['options'])
+            if args.matryoshka:
+                lossfn = MatryoshkaOperator(loss=lossfn, dims=dims, weights=weights)
             losses[task] = lossfn
 
     return losses
