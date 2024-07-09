@@ -4,6 +4,7 @@ import math
 import os
 import random
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from multiprocessing import Value
 from typing import Any, Callable, Dict, Optional, Union
@@ -136,10 +137,16 @@ def count_samples(dataloader):
     return n_elements, n_batches
 
 
+def filter_no_caption(sample: Dict[str, Any]):
+    return 'txt' in sample
+
+
+def filter_no_image(sample: Dict[str, Any]):
+    return any([ext in sample for ext in {'png', 'jpeg', 'jpg', 'webp'}])
+
+
 def filter_no_caption_or_no_image(sample: Dict[str, Any]):
-    _has_caption = 'txt' in sample
-    _has_image = any([ext in sample for ext in {'png', 'jpeg', 'jpg', 'webp'}])
-    return _has_caption and _has_image
+    return filter_no_caption(sample) and filter_no_image(sample)
 
 
 def log_and_continue(exn):
@@ -369,6 +376,25 @@ class _SyntheticDataset(Dataset):
         return image, self.preprocess_txt(self.caption)
 
 
+def _custom_webdataset_sampling_stage(data, use_long_captions: bool = False):
+    for sample in data:
+        captions = {'unk': sample['text']}
+        if 'json' in sample:
+            if use_long_captions and 'long_captions' in sample['json']:
+                captions = sample['json']['long_captions']
+            elif 'captions' in sample['json']:
+                captions = sample['json']['captions']
+            elif 'gpt4v-captions' in sample['json']:
+                captions = sample['json']['gpt4v-captions']
+
+        for lang, caption in captions.items():
+            newsample = deepcopy(sample)
+            newsample['text'] = caption
+            _ = newsample.pop('json')
+            newsample['language'] = lang
+            yield newsample
+
+
 def get_synthetic_dataset(
     num_samples: int,
     preprocess_fn: Any,
@@ -450,6 +476,8 @@ def get_wds_dataset(
     is_train: bool = False,
     tokenizer: Any = None,
     upsampling_factors: Optional[str] = None,
+    images_only: bool = False,
+    use_long_captions: bool = False,
     workers: int = 1,
     batch_size: int = 32,
     seed: int = 0,
@@ -529,16 +557,33 @@ def get_wds_dataset(
                 wds.tarfile_to_samples(handler=log_and_continue),
             ]
         )
-    pipeline.extend(
-        [
-            wds.select(filter_no_caption_or_no_image),
-            wds.decode('pilrgb', handler=log_and_continue),
-            wds.rename(image='jpg;png;jpeg;webp', text='txt'),
-            wds.map_dict(image=preprocess_fn, text=lambda text: tokenizer(text)[0]),
-            wds.to_tuple('image', 'text'),
-            wds.batched(batch_size, partial=not is_train),
-        ]
-    )
+
+    if images_only:
+        pipeline.extend(
+            [
+                wds.select(filter_no_image),
+                wds.decode('pilrgb', handler=log_and_continue),
+                wds.rename(image='jpg;png;jpeg;webp'),
+                wds.map_dict(image=preprocess_fn),
+                wds.to_tuple('image'),
+                wds.batched(batch_size, partial=not is_train),
+            ]
+        )
+    else:
+        pipeline.extend(
+            [
+                wds.select(filter_no_caption_or_no_image),
+                wds.decode('pilrgb', handler=log_and_continue),
+                wds.rename(image='jpg;png;jpeg;webp', text='txt'),
+                wds.pipelinefilter(_custom_webdataset_sampling_stage)(
+                    use_long_captions=use_long_captions
+                ),
+                wds.map_dict(image=preprocess_fn, text=lambda text: tokenizer(text)[0]),
+                wds.to_tuple('image', 'text'),
+                wds.batched(batch_size, partial=not is_train),
+            ]
+        )
+
     dataset = wds.DataPipeline(*pipeline)
 
     if is_train:
