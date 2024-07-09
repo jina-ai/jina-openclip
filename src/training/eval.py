@@ -1,11 +1,13 @@
 import json
 import os
+import random
 from collections.abc import MutableMapping
 from typing import Any, Union
 
 import numpy as np
 import torch
 import torch.nn.functional as f
+from datasets import load_dataset
 from loguru import logger
 from tqdm import tqdm
 
@@ -420,6 +422,93 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     return metrics
 
 
+def _draw_similarity_graph(model, transform, tokenizer, epoch, args, step):
+    if (
+        args.simgraph_frequency == 0
+        or ((epoch % args.simgraph_frequency) != 0 and epoch != args.epochs)
+    ):
+        return None
+
+    def _create_similarities(_images, _queries, _docs):
+        img2txt_pos_sims = []
+        txt2txt_pos_sims = []
+        img2txt_neg_sims = []
+        txt2txt_neg_sims = []
+        img2img_neg_sims = []
+        for img, query, doc in zip(images, _queries, _docs):
+            img2txt_pos_sims.append(img @ doc.T)
+            txt2txt_pos_sims.append(query @ doc.T)
+            img2txt_neg_sims.append(img @ random.choice(_docs).T)
+            txt2txt_neg_sims.append(query @ random.choice(_docs).T)
+            img2img_neg_sims.append(img @ random.choice(images).T)
+
+        return (
+            img2txt_pos_sims,
+            txt2txt_pos_sims,
+            img2txt_neg_sims,
+            txt2txt_neg_sims,
+            img2img_neg_sims,
+        )
+
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        _model = model.module
+    else:
+        _model = model
+
+    dataset = load_dataset('jxie/flickr8k')['test']
+
+    text_queries = []
+    final_images = []
+    text_docs = []
+
+    autocast = get_autocast(args.precision)
+    for item in tqdm(dataset):
+        text_inputs = tokenizer([item['caption_0'], item['caption_1']])
+        image_inputs = transform(item['image'])
+
+        images = image_inputs.unsqueeze(0).to(args.device)
+        texts = text_inputs.to(args.device)
+
+        with torch.no_grad():
+            with autocast():
+                output = _model(images, texts)
+                image_features = output['image_features'].to('cpu').numpy()
+                text_features = output['text_features'].to('cpu').numpy()
+
+        final_images.append(image_features[0])
+        text_queries.append(text_features[0])
+        text_docs.append(text_features[1])
+
+    img_txt_pos, txt_txt_pos, img_txt_neg, txt_txt_neg, img_img_neg = (
+        _create_similarities(final_images, text_queries, text_docs)
+    )
+
+    import matplotlib.pyplot as plt
+
+    _hist_kwargs = dict(bins=30, alpha=0.5, density=True)
+    plt.figure(figsize=(10, 6))
+    plt.hist(img_txt_pos, label='POSimg2txt', color='red', **_hist_kwargs)
+    plt.hist(txt_txt_pos, label='POStxt2txt', color='blue', **_hist_kwargs)
+    plt.hist(img_txt_neg, label='NEGimg2txt', color='orange', **_hist_kwargs)
+    plt.hist(txt_txt_neg, label='NEGtxt2txt', color='lightblue', **_hist_kwargs)
+    plt.hist(img_img_neg, label='NEGimg2img', color='lightgreen', **_hist_kwargs)
+
+    plt.title(f'Cosine Similarity Distribution - {args.name} epoch #{epoch}')
+    plt.xlabel('Cosine Similarity')
+    plt.ylabel('Density')
+    plt.legend(loc='upper left')
+
+    plt.grid(True)
+
+    if args.save_logs:
+        plt.savefig(os.path.join(args.checkpoint_path, f'simgraph@{epoch}.png'))
+
+    if args.wandb:
+        wandb.log({'cossim-graph': wandb.Image(plt)}, step=step or 0)
+
+    plt.close()
+
+
 def evaluate(
     model: torch.nn.Module,
     transform: Any,
@@ -432,6 +521,13 @@ def evaluate(
     metrics = {}
     if not is_master(args):
         return metrics
+
+    if 'train' in data:
+        dataloader = data['train'].dataloader
+        num_batches_per_epoch = dataloader.num_batches // args.accum_freq
+        step = num_batches_per_epoch * epoch
+    else:
+        step = None
 
     model.eval()
 
@@ -453,6 +549,8 @@ def evaluate(
     mteb_metrics = _run_mteb_benchmark(model, tokenizer, epoch, args)
     metrics.update({f'mteb-{k}': v for k, v in mteb_metrics.items()})
 
+    _draw_similarity_graph(model, transform, tokenizer, epoch, args, step)
+
     if not metrics:
         return {}
 
@@ -473,12 +571,6 @@ def evaluate(
 
     if args.wandb:
         assert wandb is not None, 'Please install wandb.'
-        if 'train' in data:
-            dataloader = data['train'].dataloader
-            num_batches_per_epoch = dataloader.num_batches // args.accum_freq
-            step = num_batches_per_epoch * epoch
-        else:
-            step = None
         logdata['epoch'] = epoch
         wandb.log(logdata, step=step)
 

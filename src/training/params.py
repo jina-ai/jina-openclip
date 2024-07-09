@@ -769,6 +769,12 @@ def parse_args(args):
         help='How often (in epochs) to run evaluation on MTEB.',
     )
     parser.add_argument(
+        '--simgraph-frequency',
+        type=int,
+        default=1,
+        help='How often (in epochs) to draw the cosine similarity distribution graph.',
+    )
+    parser.add_argument(
         '--imagenet-val',
         type=str,
         default=None,
