@@ -25,6 +25,8 @@
         "hf_tokenizer_name": "jinaai/jina-xlm-roberta-large-rope-wwm-cont",
         "hf_pooler_type": "mean_pooler",
         "hf_trust_remote_code": true,
+        "hf_model_revision": "feat-jinaclip",
+        "hf_model_code_revision": "feat-jinaclip",
         "proj_type": null
     }
 }

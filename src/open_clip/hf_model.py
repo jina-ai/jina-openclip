@@ -171,6 +171,7 @@ class HFTextEncoder(nn.Module):
         output_tokens: bool = False,
         trust_remote_code: bool = False,
         revision: Optional[str] = None,
+        code_revision: Optional[str] = None,
         model_config_kwargs: Optional[Dict] = None,
     ):
         super().__init__()
@@ -185,7 +186,8 @@ class HFTextEncoder(nn.Module):
             self.config = AutoConfig.from_pretrained(
                 model_name_or_path,
                 trust_remote_code=trust_remote_code,
-                code_revision=revision,
+                revision=revision,
+                code_revision=code_revision,
             )
             self.config.update(model_config_kwargs)
             create_func, model_args = (
@@ -203,7 +205,8 @@ class HFTextEncoder(nn.Module):
                     model_args,
                     trust_remote_code=trust_remote_code,
                     add_pooling_layer=uses_transformer_pooler,
-                    code_revision=revision,
+                    revision=revision,
+                    code_revision=code_revision,
                 )
                 self.transformer = self.transformer.encoder
             else:
@@ -211,7 +214,8 @@ class HFTextEncoder(nn.Module):
                     model_args,
                     trust_remote_code=trust_remote_code,
                     add_pooling_layer=uses_transformer_pooler,
-                    code_revision=revision,
+                    revision=revision,
+                    code_revision=code_revision,
                 )
         else:
             self.config = config
@@ -220,7 +224,8 @@ class HFTextEncoder(nn.Module):
                 self.config,
                 trust_remote_code=trust_remote_code,
                 add_pooling_layer=uses_transformer_pooler,
-                code_revision=revision,
+                revision=revision,
+                code_revision=code_revision,
             )
 
         if pooler_type is None:  # get default arch pooler
