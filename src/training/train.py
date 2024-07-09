@@ -129,7 +129,7 @@ def train_one_epoch(
     for i, (
         (images, texts),
         (_, (s3batch, __)),
-        (mtldataset, (mtlbatch, mtllabels))
+        (mtldataset, (mtlbatch, mtllabels)),
     ) in enumerate(
         zip(
             train_dataloader,
@@ -179,14 +179,16 @@ def train_one_epoch(
                 if args.distill:
                     with torch.no_grad():
                         distill_model_out = distill_model(images, alltexts)
-                    modelout.update({
-                        'distill_left_features': distill_model_out[
-                            'distill_image_features'
-                        ],
-                        'distill_right_features': distill_model_out[
-                            'distill_text_features'
-                        ]
-                    })
+                    modelout.update(
+                        {
+                            'distill_left_features': distill_model_out[
+                                'distill_image_features'
+                            ],
+                            'distill_right_features': distill_model_out[
+                                'distill_text_features'
+                            ],
+                        }
+                    )
                 modelout['output_dict'] = True
                 logit_scale = modelout['logit_scale']
                 image_features = modelout.pop('image_features')
@@ -219,9 +221,9 @@ def train_one_epoch(
                         _ = out.pop('image_features')
                         feats = out.pop('text_features')
                         if len(mtllabels) == 0:
-                            mtlfeats.extend([
-                                feats[:mtl_batch_size], feats[mtl_batch_size:]
-                            ])
+                            mtlfeats.extend(
+                                [feats[:mtl_batch_size], feats[mtl_batch_size:]]
+                            )
                         else:
                             mtlfeats.append(feats)
                     losskwargs = modelouts[0]
@@ -272,9 +274,9 @@ def train_one_epoch(
                             mtlfeats = []
                             for out in modelouts:
                                 feats = out.pop('text_features')
-                                mtlfeats.extend([
-                                    feats[:mtl_batch_size], feats[mtl_batch_size:]
-                                ])
+                                mtlfeats.extend(
+                                    [feats[:mtl_batch_size], feats[mtl_batch_size:]]
+                                )
                             accum_mtl_features.append(mtlfeats)
                         # else == triplet training
                         else:
@@ -384,9 +386,9 @@ def train_one_epoch(
                             _ = out.pop('image_features')
                             feats = out.pop('text_features')
                             if len(mtllabels) == 0:
-                                mtlfeats.extend([
-                                    feats[:mtl_batch_size], feats[mtl_batch_size:]
-                                ])
+                                mtlfeats.extend(
+                                    [feats[:mtl_batch_size], feats[mtl_batch_size:]]
+                                )
                             else:
                                 mtlfeats.append(feats)
 
@@ -482,7 +484,7 @@ def train_one_epoch(
                 batch_count * mtl_batch_size * args.accum_freq * args.world_size
             )
             num_contrastive_samples = num_samples + num_s3_samples
-            num_total_samples = num_contrastive_samples+ num_mtl_samples
+            num_total_samples = num_contrastive_samples + num_mtl_samples
 
             samples_per_epoch = train_dataloader.num_samples
             percent_complete = 100.0 * batch_count / _num_batches_per_epoch
@@ -504,8 +506,10 @@ def train_one_epoch(
                 ]
             )
             samples_per_second = (
-                args.accum_freq * (batch_size + mtl_batch_size) * args.world_size /
-                _batch_time_m.val
+                args.accum_freq
+                * (batch_size + mtl_batch_size)
+                * args.world_size
+                / _batch_time_m.val
             )
             samples_per_second_per_gpu = (
                 args.accum_freq * (batch_size + mtl_batch_size) / _batch_time_m.val

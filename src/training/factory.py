@@ -81,7 +81,8 @@ def _create_contrastive_loss(args):
         dims = [int(dim) for dim in args.matryoshka_dims.split(',')]
         weights = (
             [float(weight) for weight in args.matryoshka_weights.split(',')]
-            if args.matryoshka_weights else None
+            if args.matryoshka_weights
+            else None
         )
         logger.info(f'Using Matryoshka with dims: {dims} and weights: {weights}')
         return MatryoshkaOperator(loss=loss, dims=dims, weights=weights)
@@ -111,7 +112,8 @@ def _create_mtl_losses(args):
         dims = [int(dim) for dim in args.matryoshka_dims.split(',')]
         weights = (
             [float(weight) for weight in args.matryoshka_weights.split(',')]
-            if args.matryoshka_weights else None
+            if args.matryoshka_weights
+            else None
         )
         logger.info(f'Using Matryoshka with dims: {dims} and weights: {weights}')
 

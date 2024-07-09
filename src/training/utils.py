@@ -28,7 +28,7 @@ def setup_logging(
         import socket
 
         extra['host'] = socket.gethostname()
-    
+
     if include_rank:
         extra['rank'] = rank
 

@@ -324,12 +324,11 @@ def build_dataset(
             'flickr8k',
             'crossmodal3600',
             'xtd200',
-            'flickr30k-200'
+            'flickr30k-200',
         }:
             raise LanguageNotSupportedError(
                 f"Language '{language}' not supported for '{dataset_name}'"
             )
-
 
     train = split == 'train'
     if dataset_name == 'cifar10':

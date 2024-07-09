@@ -203,7 +203,10 @@ class S3Dataset(IterableDataset):
 
     def _async_download_shard(self, shard_num: int):
         return self._thread_pool.submit(
-            download_shard, self._bucket, self._shards[shard_num], self._tmpdir.name,
+            download_shard,
+            self._bucket,
+            self._shards[shard_num],
+            self._tmpdir.name,
         )
 
     def __len__(self):
@@ -238,7 +241,8 @@ class S3Dataset(IterableDataset):
                 raise ValueError(f'Shard {shard_pth} has unknown file extension')
 
             reader = csv.reader(
-                file, dialect='excel-tab' if self._dialect == 'tsv' else 'excel',
+                file,
+                dialect='excel-tab' if self._dialect == 'tsv' else 'excel',
             )
 
             for row in islice(reader, self._current_index, None, self._stride):

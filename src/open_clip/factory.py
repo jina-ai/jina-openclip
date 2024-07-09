@@ -311,9 +311,7 @@ def create_model(
             pretrained_loaded = True
 
         elif has_hf_hub_prefix:
-            logger.info(
-                f'Loading pretrained {model_name} weights ({checkpoint_path}).'
-            )
+            logger.info(f'Loading pretrained {model_name} weights ({checkpoint_path}).')
             load_checkpoint(model, checkpoint_path)
             pretrained_loaded = True
 

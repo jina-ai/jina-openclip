@@ -7,9 +7,10 @@ from typing import Any, Union
 import numpy as np
 import torch
 import torch.nn.functional as f
-from datasets import load_dataset
 from loguru import logger
 from tqdm import tqdm
+
+from datasets import load_dataset
 
 try:
     import wandb
@@ -423,9 +424,8 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
 
 
 def _draw_similarity_graph(model, transform, tokenizer, epoch, args, step):
-    if (
-        args.simgraph_frequency == 0
-        or ((epoch % args.simgraph_frequency) != 0 and epoch != args.epochs)
+    if args.simgraph_frequency == 0 or (
+        (epoch % args.simgraph_frequency) != 0 and epoch != args.epochs
     ):
         return None
 
