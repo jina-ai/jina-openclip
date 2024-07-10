@@ -1,40 +1,38 @@
 import csv
 import gzip
 import json
-import logging
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from types import MappingProxyType
+from typing import Dict, List, Optional, Tuple
 
 import boto3
 import torch
 from aiohttp import ClientError
-from torch.distributed import get_rank as torch_get_rank
+from loguru import logger
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     BatchEncoding,
 )
 
-from training.distributed import is_using_distributed
-
-
 s3_client = boto3.client('s3', region_name='eu-central-1')
 
 
-def get_rank(group=None):
-    if is_using_distributed():
-        return torch_get_rank(group)
-    return 0
-
-
-def log_on_rank(message: str):
-    try:
-        rank = get_rank()
-        logging.debug(f'[rank={rank}]{message}')
-    except RuntimeError:
-        logging.debug(message)
+INSTRUCTION_CONFIG = MappingProxyType(
+    {
+        '': ('', ''),
+        'retrieval': ('Query: ', 'Document for retrieval: '),
+        'sts': ('Statement for clustering: ', 'Statement for clustering: '),
+        'reranking': ('Query: ', 'Document for reranking: '),
+        'clustering': ('Statement for clustering: ', 'Statement for clustering: '),
+        'classification': (
+            'Statement for classification: ',
+            'Statement for classification: ',
+        ),
+    }
+)
 
 
 class SimLMCrossEncoder:
@@ -55,7 +53,7 @@ class SimLMCrossEncoder:
         self._model.eval()
         self._model.to(self._device)
 
-    def predict(self, sentences: list[list[str]]) -> BatchEncoding:
+    def predict(self, sentences: List[List[str]]) -> BatchEncoding:
         query, target = zip(*sentences)
         target = [f'-: {x}' for x in target]
         features = self._tokenizer(
@@ -92,7 +90,7 @@ def get_shards(dataset: str, bucket_name: str, directory: Optional[str] = None):
                 if shard['Key'] != f'{directory}/{dataset}/'
             ]
         except KeyError as e:
-            log_on_rank(f'KEY ERROR: {dataset}')
+            logger.debug(f'KEY ERROR: {dataset}')
             raise e
 
     return shards
@@ -125,12 +123,12 @@ def get_dataset_info(bucket_name, directory: Optional[str] = None):
         )
         datasets = []
         for out in result.get('CommonPrefixes'):
-            datasets.append(out.get('Prefix')[len(directory) + 1: -1])
+            datasets.append(out.get('Prefix')[len(directory) + 1 : -1])
     # try to get size info
     try:
         tags = get_tags(bucket_name, directory)
-    except Exception:
-        log_on_rank(f'Could not retrieve size values for {bucket_name}/{directory}')
+    except Exception as _:
+        logger.debug(f'Could not retrieve size values for {bucket_name}/{directory}')
         tags = {}
     dataset_dict = {}
     for dataset in datasets:
@@ -152,7 +150,7 @@ def download_shard(
         return target_path
     elif os.path.exists(shard):
         return shard
-    log_on_rank(f'Downloading shard {shard} from {source_bucket}')
+    logger.debug(f'Downloading shard {shard} from {source_bucket}')
     s3_client.download_file(
         Bucket=source_bucket,
         Key=shard,
@@ -195,13 +193,26 @@ def get_directories(path: str):
 
 
 def lookahead(f):
-    lookahead.future = None
-    thread_pool = ThreadPoolExecutor(max_workers=1)
+    pool = ThreadPoolExecutor(max_workers=1)
 
     def g(*args, **kwargs):
-        future = thread_pool.submit(f, *args, **kwargs)
-        result = lookahead.future.result() if lookahead.future is not None else None
-        lookahead.future = future
-        return result
+        future = pool.submit(f, *args, **kwargs)
+        return future.result() if future is not None else None
 
     return g
+
+
+def add_instruction(
+    texts,
+    task_type: Optional[str],
+    instruction_config: Dict[str, Tuple[str]] = INSTRUCTION_CONFIG,
+):
+    if task_type is None:
+        task_type = ''
+    first_prefix = instruction_config[task_type][0]
+    remaining_prefixes = instruction_config[task_type][1]
+    if len(texts) < 1:
+        raise ValueError('Texts must contain at least one element')
+    return [f'{first_prefix}{texts[0]}'] + [
+        f'{remaining_prefixes}{text}' for text in texts[1:]
+    ]

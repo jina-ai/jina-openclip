@@ -1,12 +1,13 @@
-""" timm model adapter
+"""timm model adapter
 
 Wraps timm (https://github.com/rwightman/pytorch-image-models) models for use as a vision tower in CLIP model.
 """
-import logging
+
 from collections import OrderedDict
 
 import torch
 import torch.nn as nn
+from loguru import logger
 
 try:
     import timm
@@ -155,7 +156,7 @@ class TimmModel(nn.Module):
         try:
             self.trunk.set_grad_checkpointing(enable)
         except Exception as _:
-            logging.warning(
+            logger.warning(
                 'grad checkpointing not supported for this timm image tower, continuing without...'
             )
 

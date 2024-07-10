@@ -1,10 +1,10 @@
-""" CLIP Model
+"""CLIP Model
 
 Adapted from https://github.com/openai/CLIP. Originally MIT License,
 Copyright (c) 2021 OpenAI.
 """
+
 import copy
-import logging
 import math
 from dataclasses import dataclass
 from functools import partial
@@ -14,9 +14,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn.functional as F
+from loguru import logger
 from torch import nn
 
-from .eva_vit_model import EVAVisionTransformer
+from .eva_model import EVAVisionTransformer
 from .hf_model import HFTextEncoder, HFVisionEncoder
 from .modified_resnet import ModifiedResNet
 from .pretrained import download_pretrained, get_pretrained_cfg
@@ -151,6 +152,7 @@ class CLIPTextCfg:
     hf_pooler_type: str = 'mean_pooler'  # attentional pooling for HF models
     hf_trust_remote_code: bool = False
     hf_model_revision: Optional[str] = None
+    hf_model_code_revision: Optional[str] = None
 
 
 def get_cast_dtype(precision: str):
@@ -360,10 +362,10 @@ def _build_vision_tower(
                 visual.load_state_dict(state_dict, strict=False)
             else:
                 _error_str = (
-                    f"No checkpoint for model '{_model_name}' found neither locally nor "
-                    f'remotely'
+                    f"No checkpoint for model '{_model_name}' found neither locally "
+                    f'nor remotely'
                 )
-                logging.exception(_error_str)
+                logger.exception(_error_str)
                 raise RuntimeError(_error_str)
 
     elif isinstance(vision_cfg.layers, (tuple, list)):
@@ -412,7 +414,7 @@ def _build_vision_tower(
 
         ckpt = vision_cfg.pt_model_name
         if ckpt is not None:
-            logging.info(f'Downloading pretrained model {ckpt} ...')
+            logger.info(f'Downloading pretrained model {ckpt} ...')
             _model, _tag = ckpt.split(' ')
             _ckpt_path = download_pretrained(
                 get_pretrained_cfg(model=_model, tag=_tag), cache_dir=cache_dir
@@ -422,7 +424,7 @@ def _build_vision_tower(
                 if visual.proj is None or vision_cfg.pt_proj_exclude:
                     exclude.append('proj')
 
-                logging.info(f'Loading pretrained model from {_ckpt_path} ...')
+                logger.info(f'Loading pretrained model from {_ckpt_path} ...')
                 load_checkpoint(
                     visual, _ckpt_path, strict=False, root='visual', exclude=exclude
                 )
@@ -431,7 +433,7 @@ def _build_vision_tower(
                     f"No checkpoint for model '{ckpt}' found neither locally nor "
                     f'remotely'
                 )
-                logging.exception(_error_str)
+                logger.exception(_error_str)
                 raise RuntimeError(_error_str)
 
     return visual
@@ -458,6 +460,7 @@ def _build_text_tower(
             output_tokens=text_cfg.output_tokens,
             trust_remote_code=text_cfg.hf_trust_remote_code,
             revision=text_cfg.hf_model_revision,
+            code_revision=text_cfg.hf_model_code_revision,
         )
     else:
         act_layer = QuickGELU if quick_gelu else nn.GELU
@@ -493,7 +496,7 @@ def _build_text_tower(
 
         ckpt = text_cfg.pt_model_name
         if ckpt is not None:
-            logging.info(f'Downloading pretrained model {ckpt} ...')
+            logger.info(f'Downloading pretrained model {ckpt} ...')
             _model, _tag = ckpt.split(' ')
             _ckpt_path = download_pretrained(
                 get_pretrained_cfg(model=_model, tag=_tag), cache_dir=cache_dir
@@ -503,7 +506,7 @@ def _build_text_tower(
                 if text.text_projection is None or text_cfg.pt_proj_exclude:
                     exclude.append('text_projection')
 
-                logging.info(f'Loading pretrained model from {_ckpt_path} ...')
+                logger.info(f'Loading pretrained model from {_ckpt_path} ...')
                 load_checkpoint(
                     text, _ckpt_path, strict=False, root='text', exclude=exclude
                 )
@@ -512,7 +515,7 @@ def _build_text_tower(
                     f'No checkpoint for model {ckpt} found neither locally nor '
                     f'remotely'
                 )
-                logging.exception(_error_str)
+                logger.exception(_error_str)
                 raise RuntimeError(_error_str)
     return text
 
@@ -528,6 +531,7 @@ class CLIP(nn.Module):
         quick_gelu: bool = False,
         init_logit_scale: float = np.log(1 / 0.07),
         init_logit_bias: Optional[float] = None,
+        freeze_logit_scale: bool = False,
         cast_dtype: Optional[torch.dtype] = None,
         output_dict: bool = False,
         cache_dir: Optional[str] = None,
@@ -549,9 +553,13 @@ class CLIP(nn.Module):
         self.text_pool_type = text.pool_type
         self.register_buffer('attn_mask', text.attn_mask, persistent=False)
 
-        self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
+        self.logit_scale = nn.Parameter(
+            torch.ones([]) * init_logit_scale, requires_grad=not freeze_logit_scale
+        )
         if init_logit_bias is not None:
-            self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
+            self.logit_bias = nn.Parameter(
+                torch.ones([]) * init_logit_bias, requires_grad=not freeze_logit_scale
+            )
         else:
             self.logit_bias = None
 
@@ -641,6 +649,7 @@ class CustomTextCLIP(nn.Module):
         quick_gelu: bool = False,
         init_logit_scale: float = np.log(1 / 0.07),
         init_logit_bias: Optional[float] = None,
+        freeze_logit_scale: bool = False,
         cast_dtype: Optional[torch.dtype] = None,
         output_dict: bool = False,
         cache_dir: Optional[str] = None,
@@ -655,9 +664,13 @@ class CustomTextCLIP(nn.Module):
         )
         self.context_length = self.text.context_length
         self.vocab_size = self.text.vocab_size
-        self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
+        self.logit_scale = nn.Parameter(
+            torch.ones([]) * init_logit_scale, requires_grad=not freeze_logit_scale
+        )
         if init_logit_bias is not None:
-            self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
+            self.logit_bias = nn.Parameter(
+                torch.ones([]) * init_logit_bias, requires_grad=not freeze_logit_scale
+            )
         else:
             self.logit_bias = None
 
@@ -835,9 +848,7 @@ def build_model_from_openai_state_dict(
     transformer_heads = transformer_width // 64
     transformer_layers = len(
         set(
-            k.split('.')[2]
-            for k in state_dict
-            if k.startswith('transformer.resblocks')
+            k.split('.')[2] for k in state_dict if k.startswith('transformer.resblocks')
         )
     )
 
@@ -914,7 +925,7 @@ def resize_pos_embed(
         pos_emb_tok, pos_emb_img = None, old_pos_embed
     old_grid_size = to_2tuple(int(math.sqrt(len(pos_emb_img))))
 
-    logging.info(
+    logger.info(
         'Resizing position embedding grid-size from %s to %s', old_grid_size, grid_size
     )
     pos_emb_img = pos_emb_img.reshape(
@@ -956,7 +967,7 @@ def resize_text_pos_embed(
     if old_num_pos == num_pos:
         return
 
-    logging.info(
+    logger.info(
         'Resizing text position embedding num_pos from %s to %s', old_num_pos, num_pos
     )
     old_pos_embed = old_pos_embed.reshape(1, old_num_pos, old_width).permute(0, 2, 1)

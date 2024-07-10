@@ -1,12 +1,17 @@
-import logging
+# --------------------------------------------------------
+# Adapted from EVA CLIP
+# https://github.com/baaivision/EVA/tree/master/EVA-CLIP/rei/eva_clip
+# --------------------------------------------------------
+
 from math import pi
 
 import torch
 from einops import rearrange, repeat
+from loguru import logger
 from torch import nn
 
 
-def broadcat(tensors, dim=-1):
+def broadcast(tensors, dim=-1):
     num_tensors = len(tensors)
     shape_lens = set(list(map(lambda t: len(t.shape), tensors)))
     assert len(shape_lens) == 1, 'tensors must all have the same number of dimensions'
@@ -68,19 +73,20 @@ class VisionRotaryEmbedding(nn.Module):
         freqs_w = torch.einsum('..., f -> ... f', t, freqs)
         freqs_w = repeat(freqs_w, '... n -> ... (n r)', r=2)
 
-        freqs = broadcat((freqs_h[:, None, :], freqs_w[None, :, :]), dim=-1)
+        freqs = broadcast((freqs_h[:, None, :], freqs_w[None, :, :]), dim=-1)
 
         self.register_buffer('freqs_cos', freqs.cos())
         self.register_buffer('freqs_sin', freqs.sin())
 
-        logging.info(f'Shape of rope freq: {self.freqs_cos.shape}')
+        logger.info(f'Shape of rope freq: {self.freqs_cos.shape}')
 
     def forward(self, t, start_index=0):
         rot_dim = self.freqs_cos.shape[-1]
         end_index = start_index + rot_dim
-        assert (
-            rot_dim <= t.shape[-1]
-        ), f'feature dimension {t.shape[-1]} is not of sufficient size to rotate in all the positions {rot_dim}'
+        assert rot_dim <= t.shape[-1], (
+            f'feature dimension {t.shape[-1]} is not of sufficient size to rotate in '
+            f'all the positions {rot_dim}'
+        )
         t_left, t, t_right = (
             t[..., :start_index],
             t[..., start_index:end_index],
@@ -124,7 +130,7 @@ class VisionRotaryEmbeddingFast(nn.Module):
 
         freqs = torch.einsum('..., f -> ... f', t, freqs)
         freqs = repeat(freqs, '... n -> ... (n r)', r=2)
-        freqs = broadcat((freqs[:, None, :], freqs[None, :, :]), dim=-1)
+        freqs = broadcast((freqs[:, None, :], freqs[None, :, :]), dim=-1)
 
         freqs_cos = freqs.cos().view(-1, freqs.shape[-1])
         freqs_sin = freqs.sin().view(-1, freqs.shape[-1])
@@ -134,7 +140,7 @@ class VisionRotaryEmbeddingFast(nn.Module):
         self.register_buffer('freqs_cos', freqs_cos)
         self.register_buffer('freqs_sin', freqs_sin)
 
-        logging.info(f'Shape of rope freq: {self.freqs_cos.shape}')
+        logger.info(f'Shape of rope freq: {self.freqs_cos.shape}')
 
     def forward(self, t, patch_indices_keep=None):
         if patch_indices_keep is not None:

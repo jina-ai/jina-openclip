@@ -1,13 +1,16 @@
 import json
-import logging
 import os
+import random
 from collections.abc import MutableMapping
 from typing import Any, Union
 
 import numpy as np
 import torch
 import torch.nn.functional as f
+from loguru import logger
 from tqdm import tqdm
+
+from datasets import load_dataset
 
 try:
     import wandb
@@ -21,9 +24,8 @@ from open_clip import (
     get_input_dtype,
     get_tokenizer,
 )
-
 from training.distributed import is_master
-from training.precision import get_autocast
+from training.utils import get_autocast
 
 MTEB_LOGGING_METRICS = ['ndcg_at_10', 'cos_sim']
 
@@ -33,7 +35,7 @@ def _get_clip_metrics(image_features, text_features, logit_scale):
     logits_per_image = (logit_scale * image_features @ text_features.t()).detach().cpu()
     logits_per_text = logits_per_image.t().detach().cpu()
 
-    logits = {'image-to-text': logits_per_image, 'text-to-image': logits_per_text}
+    logits = {'image2text': logits_per_image, 'text2image': logits_per_text}
     ground_truth = torch.arange(len(text_features)).view(-1, 1)
 
     for name, logit in logits.items():
@@ -56,15 +58,15 @@ def _maybe_compute_generative_loss(model_out):
 
 
 def _run_validation(model, data, epoch, args):
-    if 'val' not in data:
-        return {}
-    if args.val_frequency == 0:
-        return {}
-    if (epoch % args.val_frequency) != 0 and epoch != args.epochs:
+    if (
+        'val' not in data
+        or args.val_frequency == 0
+        or ((epoch % args.val_frequency) != 0 and epoch != args.epochs)
+    ):
         return {}
 
-    logging.info('--------------------------------------------------------------------')
-    logging.info('Starting evaluation on the validation set ...')
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting evaluation on the validation set ...')
 
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
@@ -83,7 +85,7 @@ def _run_validation(model, data, epoch, args):
 
     metrics = {}
 
-    logging.info('Infering text and image features ...')
+    logger.info('Infering text and image features ...')
 
     with torch.no_grad():
         for i, batch in enumerate(dataloader):
@@ -112,25 +114,24 @@ def _run_validation(model, data, epoch, args):
                     f.cross_entropy(logits_per_image, labels)
                     + f.cross_entropy(logits_per_text, labels)
                 ) / 2
-
                 gen_loss = _maybe_compute_generative_loss(model_out)
 
             cumulative_loss += total_loss * batch_size
             num_samples += batch_size
             if is_master(args) and (i % 100) == 0:
-                logging.info(
-                    f'Eval Epoch: {epoch} [{num_samples} / {samples_per_val}]\t'
-                    f'Clip Loss: {cumulative_loss / num_samples:.6f}\t'
+                logger.info(
+                    f'Eval epoch: {epoch} [{num_samples} / {samples_per_val}]\t'
+                    f'Clip loss: {cumulative_loss / num_samples:.6f}\t'
                 )
 
                 if gen_loss is not None:
                     cumulative_gen_loss += gen_loss * batch_size
-                    logging.info(
-                        f'Generative Loss: '
+                    logger.info(
+                        f'Generative loss: '
                         f'{cumulative_gen_loss / num_samples:.6f}\t'
                     )
 
-        logging.info('Calculating CLIP metrics, mean/median rank and recall ...')
+        logger.info('Calculating CLIP metrics, mean/median rank and recall ...')
 
         val_metrics = _get_clip_metrics(
             image_features=torch.cat(all_image_features),
@@ -138,20 +139,13 @@ def _run_validation(model, data, epoch, args):
             logit_scale=logit_scale.cpu(),
         )
         loss = cumulative_loss / num_samples
-        metrics.update(
-            {
-                **val_metrics,
-                'clip_loss': loss.item(),
-                'epoch': epoch,
-                'num_samples': num_samples,
-            }
-        )
+        metrics.update({**val_metrics, 'clip-loss': loss.item()})
         if gen_loss is not None:
             gen_loss = cumulative_gen_loss / num_samples
-            metrics.update({'generative_loss': gen_loss.item()})
+            metrics.update({'generative-loss': gen_loss.item()})
 
-    logging.info('Finished!')
-    logging.info('--------------------------------------------------------------------')
+    logger.info('Finished!')
+    logger.info('--------------------------------------------------------------------')
 
     return metrics
 
@@ -195,21 +189,22 @@ def _run_classifier(model, classifier, dataloader, args):
 
 
 def _run_zeroshot_evaluation(model, data, epoch, args, tokenizer=None):
-    if 'imagenet-val' not in data and 'imagenet-v2' not in data:
+    if (
+        ('imagenet-val' not in data and 'imagenet-v2' not in data)
+        or args.zeroshot_frequency == 0
+        or ((epoch % args.zeroshot_frequency) != 0 and epoch != args.epochs)
+    ):
         return {}
-    if args.zeroshot_frequency == 0:
-        return {}
-    if (epoch % args.zeroshot_frequency) != 0 and epoch != args.epochs:
-        return {}
+
     if args.distributed and not args.horovod:
         model = model.module
 
-    logging.info('--------------------------------------------------------------------')
-    logging.info('Starting zero-shot evaluation on Imagenet ...')
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting zero-shot evaluation on ImageNet ...')
     if tokenizer is None:
         tokenizer = get_tokenizer(args.model)
 
-    logging.info('Building zero-shot classifier ...')
+    logger.info('Building zero-shot classifier ...')
     autocast = get_autocast(args.precision)
     with autocast():
         classifier = build_zero_shot_classifier(
@@ -222,7 +217,7 @@ def _run_zeroshot_evaluation(model, data, epoch, args, tokenizer=None):
             use_tqdm=True,
         )
 
-    logging.info('Using classifier ...')
+    logger.info('Using classifier ...')
     results = {}
     if 'imagenet-val' in data:
         top1, top5 = _run_classifier(
@@ -237,20 +232,20 @@ def _run_zeroshot_evaluation(model, data, epoch, args, tokenizer=None):
         results['imagenetv2-zeroshot-top1'] = top1
         results['imagenetv2-zeroshot-top5'] = top5
 
-    logging.info('Finished zero-shot evaluation!')
-    logging.info('--------------------------------------------------------------------')
+    logger.info('Finished zero-shot evaluation!')
+    logger.info('--------------------------------------------------------------------')
 
     return results
 
 
 def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
-    if args.clip_benchmark_frequency == 0:
-        return {}
-    if (epoch % args.clip_benchmark_frequency) != 0 and epoch != args.epochs:
+    if args.clip_benchmark_frequency == 0 or (
+        (epoch % args.clip_benchmark_frequency) != 0 and epoch != args.epochs
+    ):
         return {}
 
-    logging.info('--------------------------------------------------------------------')
-    logging.info('Starting the CLIP benchmark ...')
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting the CLIP benchmark ...')
 
     from clip_benchmark.run import CLIPBenchmarkModel, run_benchmark
 
@@ -263,6 +258,7 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
     with autocast():
         results = run_benchmark(
             datasets=[t for t in args.clip_benchmark_datasets.split(',')],
+            languages=[lang for lang in args.clip_benchmark_languages.split(',')],
             models=[
                 CLIPBenchmarkModel(
                     name=args.model,
@@ -281,26 +277,27 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
     metrics = {}
     for result in results:
         dataset = result['dataset']
+        language = result['language']
         for k, v in result['metrics'].items():
-            metrics[f'{dataset}-{k}'] = v
+            metrics[f'{dataset}-{language}-{k}'] = v
 
-    logging.info('Finished CLIP benchmark!')
-    logging.info('--------------------------------------------------------------------')
+    logger.info('Finished CLIP benchmark!')
+    logger.info('--------------------------------------------------------------------')
 
     return metrics
 
 
 def _run_mteb_benchmark(model, tokenizer, epoch, args):
-    if args.mteb_frequency == 0:
-        return {}
-    if (epoch % args.mteb_frequency) != 0 and epoch != args.epochs:
+    if args.mteb_frequency == 0 or (
+        (epoch % args.mteb_frequency) != 0 and epoch != args.epochs
+    ):
         return {}
 
-    logging.info('--------------------------------------------------------------------')
-    logging.info('Starting the MTEB benchmark ...')
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting the MTEB benchmark ...')
 
     from mteb import MTEB
-    from open_clip.model import CLIP
+    from open_clip.model import CLIP, CustomTextCLIP
     from transformers import AutoTokenizer
 
     class _MTEBModel(torch.nn.Module):
@@ -327,7 +324,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
 
             self._model = _model
 
-            if isinstance(_model, CLIP):
+            if isinstance(_model, CLIP) or isinstance(_model, CustomTextCLIP):
                 assert _tokenizer is not None
                 self._tokenizer = _tokenizer
                 self._embed = self._clip_embed
@@ -395,7 +392,6 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     _mteb_model = _MTEBModel(
         clip_model=model,
         _tokenizer=tokenizer,
-        hf_tokenizer_name=args.mteb_tokenizer_name,
         max_seq_length=args.mteb_max_sequence_length,
         device=args.device,
     )
@@ -404,7 +400,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     autocast = get_autocast(args.precision)
     with autocast():
         for task in args.mteb_tasks.split(','):
-            evaluation = MTEB(tasks=[task], task_langs=['en'])
+            evaluation = MTEB(tasks=[task], task_langs=args.mteb_languages.split(','))
             results = evaluation.run(
                 _mteb_model,
                 batch_size=16,
@@ -421,10 +417,96 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
                 }
             )
 
-    logging.info('Finished MTEB benchmark!')
-    logging.info('--------------------------------------------------------------------')
+    logger.info('Finished MTEB benchmark!')
+    logger.info('--------------------------------------------------------------------')
 
     return metrics
+
+
+def _draw_similarity_graph(model, transform, tokenizer, epoch, args, step):
+    if args.simgraph_frequency == 0 or (
+        (epoch % args.simgraph_frequency) != 0 and epoch != args.epochs
+    ):
+        return None
+
+    def _create_similarities(_images, _queries, _docs):
+        img2txt_pos_sims = []
+        txt2txt_pos_sims = []
+        img2txt_neg_sims = []
+        txt2txt_neg_sims = []
+        img2img_neg_sims = []
+        for img, query, doc in zip(images, _queries, _docs):
+            img2txt_pos_sims.append(img @ doc.T)
+            txt2txt_pos_sims.append(query @ doc.T)
+            img2txt_neg_sims.append(img @ random.choice(_docs).T)
+            txt2txt_neg_sims.append(query @ random.choice(_docs).T)
+            img2img_neg_sims.append(img @ random.choice(images).T)
+
+        return (
+            img2txt_pos_sims,
+            txt2txt_pos_sims,
+            img2txt_neg_sims,
+            txt2txt_neg_sims,
+            img2img_neg_sims,
+        )
+
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        _model = model.module
+    else:
+        _model = model
+
+    dataset = load_dataset('jxie/flickr8k')['test']
+
+    text_queries = []
+    final_images = []
+    text_docs = []
+
+    autocast = get_autocast(args.precision)
+    for item in tqdm(dataset):
+        text_inputs = tokenizer([item['caption_0'], item['caption_1']])
+        image_inputs = transform(item['image'])
+
+        images = image_inputs.unsqueeze(0).to(args.device)
+        texts = text_inputs.to(args.device)
+
+        with torch.no_grad():
+            with autocast():
+                output = _model(images, texts)
+                image_features = output['image_features'].to('cpu').numpy()
+                text_features = output['text_features'].to('cpu').numpy()
+
+        final_images.append(image_features[0])
+        text_queries.append(text_features[0])
+        text_docs.append(text_features[1])
+
+    img_txt_pos, txt_txt_pos, img_txt_neg, txt_txt_neg, img_img_neg = (
+        _create_similarities(final_images, text_queries, text_docs)
+    )
+
+    import matplotlib.pyplot as plt
+
+    _hist_kwargs = dict(bins=30, alpha=0.5, density=True)
+    plt.figure(figsize=(10, 6))
+    plt.hist(img_txt_pos, label='POSimg2txt', color='red', **_hist_kwargs)
+    plt.hist(txt_txt_pos, label='POStxt2txt', color='blue', **_hist_kwargs)
+    plt.hist(img_txt_neg, label='NEGimg2txt', color='orange', **_hist_kwargs)
+    plt.hist(txt_txt_neg, label='NEGtxt2txt', color='lightblue', **_hist_kwargs)
+    plt.hist(img_img_neg, label='NEGimg2img', color='lightgreen', **_hist_kwargs)
+
+    plt.title(f'Cosine Similarity Distribution - {args.name} epoch #{epoch}')
+    plt.xlabel('Cosine Similarity')
+    plt.ylabel('Density')
+    plt.legend(loc='upper left')
+
+    plt.grid(True)
+
+    if args.save_logs:
+        plt.savefig(os.path.join(args.checkpoint_path, f'simgraph@{epoch}.png'))
+
+    if args.wandb:
+        wandb.log({'cossim-graph': wandb.Image(plt)}, step=step or 0)
+
+    plt.close()
 
 
 def evaluate(
@@ -440,9 +522,16 @@ def evaluate(
     if not is_master(args):
         return metrics
 
+    if 'train' in data:
+        dataloader = data['train'].dataloader
+        num_batches_per_epoch = dataloader.num_batches // args.accum_freq
+        step = num_batches_per_epoch * epoch
+    else:
+        step = None
+
     model.eval()
 
-    logging.info('--------------------------- EVALUATION -----------------------------')
+    logger.info('--------------------------- EVALUATION -----------------------------')
 
     zero_shot_metrics = _run_zeroshot_evaluation(
         model, data, epoch, args, tokenizer=tokenizer
@@ -455,19 +544,20 @@ def evaluate(
     clip_benchmark_metrics = _run_clip_benchmark(
         model, tokenizer, transform, epoch, args
     )
-    metrics.update({f'clipbenchmark-{k}': v for k, v in clip_benchmark_metrics.items()})
+    metrics.update({f'clipb-{k}': v for k, v in clip_benchmark_metrics.items()})
 
     mteb_metrics = _run_mteb_benchmark(model, tokenizer, epoch, args)
     metrics.update({f'mteb-{k}': v for k, v in mteb_metrics.items()})
 
+    _draw_similarity_graph(model, transform, tokenizer, epoch, args, step)
+
     if not metrics:
         return {}
 
-    logging.info(
-        f'Eval Epoch: {epoch} '
+    logger.info(
+        f'Eval epoch: {epoch} '
         + '\t'.join([f'{k}: {round(v, 4):.4f}' for k, v in metrics.items()])
     )
-
     logdata = {'val/' + name: val for name, val in metrics.items()}
 
     if args.save_logs:
@@ -481,15 +571,9 @@ def evaluate(
 
     if args.wandb:
         assert wandb is not None, 'Please install wandb.'
-        if 'train' in data:
-            dataloader = data['train'].dataloader
-            num_batches_per_epoch = dataloader.num_batches // args.accum_freq
-            step = num_batches_per_epoch * epoch
-        else:
-            step = None
         logdata['epoch'] = epoch
         wandb.log(logdata, step=step)
 
-    logging.info('------------------------------ DONE --------------------------------')
+    logger.info('------------------------------ DONE --------------------------------')
 
     return metrics

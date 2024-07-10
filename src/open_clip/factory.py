@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 from copy import deepcopy
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
+from loguru import logger
 
 from .coca_model import CoCa
 from .loss import (
@@ -26,7 +26,6 @@ from .model import (
     load_checkpoint,
     set_model_preprocess_cfg,
 )
-from .multi_tower_model import ThreeTowersCustomTextCLIP
 from .openai import load_openai_model
 from .pretrained import (
     download_pretrained,
@@ -191,7 +190,7 @@ def create_model(
         device = torch.device(device)
 
     if pretrained and pretrained.lower() == 'openai':
-        logging.info(f'Loading pretrained {model_name} from OpenAI.')
+        logger.info(f'Loading pretrained {model_name} from OpenAI.')
         model = load_openai_model(
             model_name,
             precision=precision,
@@ -201,9 +200,9 @@ def create_model(
     else:
         model_cfg = model_cfg or get_model_config(model_name)
         if model_cfg is not None:
-            logging.info(f'Loaded {model_name} model config.')
+            logger.info(f'Loaded {model_name} model config.')
         else:
-            logging.error(
+            logger.error(
                 f'Model config for {model_name} not found; '
                 f'available models {list_models()}.'
             )
@@ -253,10 +252,6 @@ def create_model(
         if custom_text:
             if 'multimodal_cfg' in model_cfg:
                 model = CoCa(**model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir)
-            elif 'teacher_cfg' in model_cfg:
-                model = ThreeTowersCustomTextCLIP(
-                    **model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir
-                )
             else:
                 model = CustomTextCLIP(
                     **model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir
@@ -288,7 +283,7 @@ def create_model(
             dtype = torch.float16 if 'fp16' in precision else torch.bfloat16
             model.to(device=device, dtype=dtype)
         else:
-            model.to(device=device)
+            model.to(device=device, dtype=torch.float32)
 
         pretrained_loaded = False
         if pretrained:
@@ -303,7 +298,7 @@ def create_model(
                 checkpoint_path = pretrained
 
             if checkpoint_path:
-                logging.info(f'Loading pretrained {model_name} weights ({pretrained}).')
+                logger.info(f'Loading pretrained {model_name} weights ({pretrained}).')
                 load_checkpoint(model, checkpoint_path)
             else:
                 error_str = (
@@ -311,14 +306,12 @@ def create_model(
                     f'{model_name}.Available pretrained tags '
                     f'({list_pretrained_tags_by_model(model_name)}.'
                 )
-                logging.warning(error_str)
+                logger.warning(error_str)
                 raise RuntimeError(error_str)
             pretrained_loaded = True
 
         elif has_hf_hub_prefix:
-            logging.info(
-                f'Loading pretrained {model_name} weights ({checkpoint_path}).'
-            )
+            logger.info(f'Loading pretrained {model_name} weights ({checkpoint_path}).')
             load_checkpoint(model, checkpoint_path)
             pretrained_loaded = True
 

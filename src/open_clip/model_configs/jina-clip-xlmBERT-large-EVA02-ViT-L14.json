@@ -1,0 +1,32 @@
+{
+    "embed_dim": 1024,
+    "vision_cfg": {
+        "image_size": 224,
+        "layers": 24,
+        "width": 1024,
+        "head_width": 64,
+        "patch_size": 14,
+        "mlp_ratio": 2.6667,
+        "patch_dropout": 0.1,
+        "eva_model_name": "EVA02",
+        "eva_pretrained": "L14",
+        "drop_path_rate": 0.0,
+        "xattn": true,
+        "fusedLN": true,
+        "rope": true,
+        "pt_hw_seq_len": 16,
+        "intp_freq": true,
+        "naiveswiglu": true,
+        "subln": true
+    },
+    "text_cfg": {
+        "context_length": 77,
+        "hf_model_name": "jinaai/jina-xlm-roberta-large-rope-wwm-cont",
+        "hf_tokenizer_name": "jinaai/jina-xlm-roberta-large-rope-wwm-cont",
+        "hf_pooler_type": "mean_pooler",
+        "hf_trust_remote_code": true,
+        "hf_model_revision": "feat-jinaclip",
+        "hf_model_code_revision": "feat-jinaclip",
+        "proj_type": null
+    }
+}
