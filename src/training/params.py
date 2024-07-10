@@ -51,8 +51,9 @@ def parse_args(args):
         type=str,
         default=None,
         help=(
-            'Path to file(s) with training data. When using type `webdataset` multiple '
-            'datasources can be combined using the `::` separator.'
+            'Path to file(s) with the multimodal training data. When using type '
+            '`webdataset` multiple datasources can be combined using the `::` '
+            'separator.'
         ),
     )
     parser.add_argument(
@@ -69,47 +70,70 @@ def parse_args(args):
         ),
     )
     parser.add_argument(
-        '--train-data-s3',
-        type=str,
-        default=None,
-        help='Similar to --train-data, but reserved for datasets located in S3.',
-    )
-    parser.add_argument(
-        '--train-data-s3-upsampling-factors',
-        type=str,
-        default=None,
-        help='Similar to --train-data-upsampling-factors, but for --train-data-s3.',
-    )
-    parser.add_argument(
-        '--train-data-s3-bucket',
+        '--train-txtdata',
         type=str,
         default=None,
         help=(
-            'In case S3 datasets are provided in --train-data-s3, this argument '
+            'Optional, similar to --train-data, but reserved for S3 datasets that '
+            'contain text pairs. If provided, text pairs will be added to each '
+            'multimodal batch for unified contrastive txt-img and txt-txt learning. '
+            'Multiple S3 datasets can be combined using the `::` separator.'
+        ),
+    )
+    parser.add_argument(
+        '--train-txtdata-upsampling-factors',
+        type=str,
+        default=None,
+        help='Similar to --train-data-upsampling-factors, but for --train-txtdata.',
+    )
+    parser.add_argument(
+        '--train-txtdata-s3bucket',
+        type=str,
+        default=None,
+        help=(
+            'In case S3 datasets are provided in --train-txtdata, this argument '
             'specifies the S3 bucket where datasets are located.'
         ),
     )
     parser.add_argument(
-        '--train-data-mtl',
+        '--train-imgdata',
         type=str,
         default=None,
         help=(
-            'Similar to --train-data-s3 but the datasets specified here are used in '
-            'parallel to the main training loop. Useful for joint Multi Task '
-            'Training.'
+            'Optional, similar to --train-data, but reserved for datasets that '
+            'contain image pairs. If provided, image pairs will be added to each '
+            'multimodal batch for unified contrastive img-txt and img-img learning. '
+            'Only supports webdataset type, multiple datasources can be combined using '
+            'the `::` separator.'
         ),
     )
     parser.add_argument(
-        '--train-data-mtl-upsampling-factors',
+        '--train-imgdata-upsampling-factors',
         type=str,
         default=None,
-        help='Similar to --train-data-s3-upsampling-factors but for --train-data-mtl.',
+        help='Similar to --train-data-upsampling-factors, but for --train-imgdata.',
     )
     parser.add_argument(
-        '--train-data-mtl-s3-bucket',
+        '--train-mtldata',
         type=str,
         default=None,
-        help='Similar to --train-data-s3-bucket but for --train-data-mtl.',
+        help=(
+            'Similar to --train-txtdata but the text datasets specified here are used '
+            'in a separate batch that is processed in parallel to the main multimodal '
+            'batch. Useful for joint Multi Task Training.'
+        ),
+    )
+    parser.add_argument(
+        '--train-mtldata-upsampling-factors',
+        type=str,
+        default=None,
+        help='Similar to --train-data-upsampling-factors but for --train-mtldata.',
+    )
+    parser.add_argument(
+        '--train-mtldata-s3bucket',
+        type=str,
+        default=None,
+        help='Similar to --train-txtdata-s3bucket but for --train-mtldata.',
     )
     parser.add_argument(
         '--train-num-samples',
