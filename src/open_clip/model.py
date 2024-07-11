@@ -81,6 +81,10 @@ class CLIPVisionCfg:
     timm_proj_bias: bool = False
     # head dropout
     timm_drop: float = 0.0
+    #attention dropout
+    timm_attn_drop: float = 0.0
+    #mpl hidden layer dropout, is called proj_drop for timm
+    timm_proj_drop: float = 0.0
     # backbone stochastic depth
     timm_drop_path: Optional[float] = None
 
@@ -299,6 +303,8 @@ def _build_vision_tower(
             patch_drop=vision_cfg.patch_dropout
             if vision_cfg.patch_dropout > 0
             else None,
+            attn_drop=vision_cfg.timm_attn_drop,
+            proj_drop=vision_cfg.timm_proj_drop,
             embed_dim=embed_dim,
             image_size=vision_cfg.image_size,
         )

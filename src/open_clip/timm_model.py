@@ -43,6 +43,8 @@ class TimmModel(nn.Module):
         drop=0.0,
         drop_path=None,
         patch_drop=None,
+        attn_drop=None,
+        proj_drop=None,
         pretrained=False,
     ):
         super().__init__()
@@ -56,6 +58,11 @@ class TimmModel(nn.Module):
             timm_kwargs['drop_path_rate'] = drop_path
         if patch_drop is not None:
             timm_kwargs['patch_drop_rate'] = patch_drop
+        if attn_drop is not None:
+            timm_kwargs['attn_drop_rate'] = attn_drop
+        #proj_drop == mlp of each hidden layer for timm
+        if proj_drop is not None:
+            timm_kwargs['proj_drop_rate'] = proj_drop
 
         custom_pool = pool in ('abs_attn', 'rot_attn')
         if proj:
