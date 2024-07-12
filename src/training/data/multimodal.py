@@ -476,7 +476,7 @@ def get_wds_dataset(
     is_train: bool = False,
     tokenizer: Any = None,
     upsampling_factors: Optional[str] = None,
-    images_only: bool = False,
+    images_pairs: bool = False,
     use_long_captions: bool = False,
     workers: int = 1,
     batch_size: int = 32,
@@ -558,14 +558,16 @@ def get_wds_dataset(
             ]
         )
 
-    if images_only:
+    if images_pairs:
         pipeline.extend(
             [
                 wds.select(filter_no_image),
                 wds.decode('pilrgb', handler=log_and_continue),
-                wds.rename(image='jpg;png;jpeg;webp'),
-                wds.map_dict(image=preprocess_fn),
-                wds.to_tuple('image'),
+                wds.rename(
+                    image_left='jpg;png;jpeg;webp', image_right='jpg;png;jpeg;webp'
+                ),
+                wds.map_dict(image_left=preprocess_fn, image_right=preprocess_fn),
+                wds.to_tuple('image_left', 'image_right'),
                 wds.batched(batch_size, partial=not is_train),
             ]
         )

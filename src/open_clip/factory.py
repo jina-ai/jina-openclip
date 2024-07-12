@@ -445,19 +445,19 @@ def create_model_and_transforms(
         **model_kwargs,
     )
 
-    pp_cfg = PreprocessCfg(**model.visual.preprocess_cfg)
+    preprocess_cfg = PreprocessCfg(**model.visual.preprocess_cfg)
 
     preprocess_train = image_transform_v2(
-        pp_cfg,
+        preprocess_cfg,
         is_train=True,
         aug_cfg=aug_cfg,
     )
     preprocess_val = image_transform_v2(
-        pp_cfg,
+        preprocess_cfg,
         is_train=False,
     )
 
-    return model, preprocess_train, preprocess_val
+    return model, preprocess_cfg, preprocess_train, preprocess_val
 
 
 def create_model_from_pretrained(

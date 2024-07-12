@@ -3,7 +3,9 @@ import os
 from functools import partial
 from typing import Any, Dict, List, Optional, Union
 
+import torch
 from loguru import logger
+from open_clip.transform import PreprocessCfg
 from torch.utils.data import DataLoader
 from training.data import (
     InputType,
@@ -166,6 +168,7 @@ def _create_multimodal_dataloader(
             is_train=True,
             tokenizer=tokenizer,
             upsampling_factors=args.train_data_upsampling_factors,
+            use_long_captions=False,
             workers=args.workers,
             batch_size=batch_size,
             seed=args.seed,
@@ -238,6 +241,61 @@ def _create_multimodal_dataloader(
         )
 
     return data
+
+
+def _create_images_dataloader(
+    args, preprocess_cfg: PreprocessCfg, tokenizer, batch_size, epoch
+):
+    from timm.data import RandomResizedCropAndInterpolation
+    from torchvision import transforms
+
+    # augmentation follows exactly the one described in SimCLR paper
+    # https://arxiv.org/pdf/2002.05709v3
+    # See Section 3 and Appendix A
+    s = 1.0  # strength parameter, stronger color jitter equals better results
+    pipeline = [
+        RandomResizedCropAndInterpolation(
+            preprocess_cfg.size,
+            scale=(0.08, 1.0),
+            ratio=(3.0 / 4.0, 4.0 / 3.0),
+            interpolation=preprocess_cfg.interpolation,
+        ),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomApply(
+            [transforms.ColorJitter(0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s)], p=0.8
+        ),
+        transforms.RandomGrayscale(p=0.2),
+        transforms.RandomApply(
+            [
+                transforms.GaussianBlur(
+                    kernel_size=int(preprocess_cfg.size * 0.1) + 1, sigma=(0.1, 2.0)
+                ),
+            ],
+            p=0.5,
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=torch.tensor(preprocess_cfg.mean),
+            std=torch.tensor(preprocess_cfg.std),
+        ),
+    ]
+    augmentation_fn = transforms.Compose(pipeline)
+
+    return get_wds_dataset(
+        shards=args.train_imgdata,
+        preprocess_fn=augmentation_fn,
+        num_samples=args.train_num_samples,
+        is_train=True,
+        tokenizer=tokenizer,
+        upsampling_factors=args.train_imgdata_upsampling_factors,
+        images_pairs=True,
+        workers=args.workers,
+        batch_size=batch_size,
+        seed=args.seed,
+        epoch=epoch,
+        dataset_resampled=args.dataset_resampled,
+        world_size=args.world_size,
+    )
 
 
 def _create_s3_dataloader(
@@ -329,15 +387,23 @@ def create_dataloaders(
     epoch: int,
     tokenizer: Any,
     mtl_losses: Optional[Dict[str, Any]] = None,
+    preprocess_cfg: Optional[PreprocessCfg] = None,
 ):
-    logger.info('Creating the multimodal dataloader ...')
     batch_size = args.batch_size
-    s3_batch_size = 0
+    txt_batch_size = 0
+    img_batch_size = 0
 
-    if args.train_data_s3:
-        s3_batch_size = batch_size // 2
-        batch_size = batch_size - s3_batch_size
+    if args.train_txtdata and args.train_imgdata:
+        txt_batch_size = batch_size // 4
+        img_batch_size = batch_size // 4
+    elif args.train_txtdata:
+        txt_batch_size = batch_size // 2
+    elif args.train_imgdata:
+        img_batch_size = batch_size // 2
 
+    batch_size -= txt_batch_size + img_batch_size
+
+    logger.info('Creating the multimodal dataloader ...')
     logger.debug(f'Batch size: {batch_size}')
     data = _create_multimodal_dataloader(
         args=args,
@@ -348,27 +414,27 @@ def create_dataloaders(
         batch_size=batch_size,
     )
 
-    if args.train_data_s3:
-        logger.info('Creating the S3 dataloader ...')
-        logger.debug(f'Batch size: {s3_batch_size}')
+    if args.train_txtdata:
+        logger.info('Creating the text pair S3 dataloader ...')
+        logger.debug(f'Batch size: {txt_batch_size}')
         assert isinstance(tokenizer.tokenizer, PreTrainedTokenizer) or isinstance(
             tokenizer.tokenizer, PreTrainedTokenizerFast
         )
         upsampling_factors = None
-        if args.train_data_s3_upsampling_factors:
+        if args.train_txtdata_upsampling_factors:
             upsampling_factors = [
-                float(v) for v in args.train_data_s3_upsampling_factors.split('::')
+                float(v) for v in args.train_txtdata_upsampling_factors.split('::')
             ]
-        data['train-s3'] = _create_s3_dataloader(
-            datasets=args.train_data_s3.split('::'),
-            bucket=args.train_data_s3_bucket,
+        data['train-text'] = _create_s3_dataloader(
+            datasets=args.train_txtdata.split('::'),
+            bucket=args.train_txtdata_s3bucket,
             input_type_dict={'*': InputType.PAIR},
             tokenizer=tokenizer.tokenizer,
             sampling_rates=upsampling_factors,
             resume=args.resume,
-            batch_size=s3_batch_size,
+            batch_size=txt_batch_size,
             max_sequence_length=args.max_sequence_length,
-            prefix='s3',
+            prefix='text',
             max_shards=args.s3_max_shards,
             max_batches=args.s3_max_batches,
             num_batches=args.s3_num_batches,
@@ -377,22 +443,36 @@ def create_dataloaders(
             world_size=args.world_size,
         )
     else:
-        data['train-s3'] = None
+        data['train-text'] = None
 
-    if args.train_data_mtl:
+    if args.train_imgdata:
+        assert preprocess_cfg is not None
+        logger.info('Creating the image pairs dataloader ...')
+        logger.debug(f'Batch size: {img_batch_size}')
+        data['train-image'] = _create_images_dataloader(
+            args=args,
+            preprocess_cfg=preprocess_cfg,
+            tokenizer=tokenizer,
+            batch_size=img_batch_size,
+            epoch=epoch,
+        )
+    else:
+        data['train-image'] = None
+
+    if args.train_mtldata:
         logger.info('Creating the MTL dataloader ...')
         logger.debug(f'Batch size: {args.mtl_batch_size}')
         assert isinstance(tokenizer.tokenizer, PreTrainedTokenizer) or isinstance(
             tokenizer.tokenizer, PreTrainedTokenizerFast
         )
         upsampling_factors = None
-        if args.train_data_mtl_upsampling_factors:
+        if args.train_mtldata_upsampling_factors:
             upsampling_factors = [
-                float(v) for v in args.train_data_mtl_upsampling_factors.split('::')
+                float(v) for v in args.train_mtldata_upsampling_factors.split('::')
             ]
         data['train-mtl'] = _create_s3_dataloader(
-            datasets=args.train_data_mtl.split('::'),
-            bucket=args.train_data_mtl_s3_bucket,
+            datasets=args.train_mtldata.split('::'),
+            bucket=args.train_mtldata_s3bucket,
             input_type_dict={
                 task: lossfn.input_type for task, lossfn in mtl_losses.items()
             },

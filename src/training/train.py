@@ -64,12 +64,20 @@ def backward(total_loss, model, scaler=None, deepspeed=False):
         total_loss.backward()
 
 
-class _DummyDataloader:
+class _DummyS3Dataloader:
     def __iter__(self):
         return self
 
     def __next__(self):
         return None, (None, None)
+
+
+class _DummyWDSDataloader:
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return None, None
 
 
 def train_one_epoch(
@@ -97,15 +105,19 @@ def train_one_epoch(
     data['train'].set_epoch(epoch)
     train_dataloader = data['train'].dataloader
 
-    train_s3_dataloader = data['train-s3']
-    if train_s3_dataloader is None:
-        train_s3_dataloader = _DummyDataloader()
+    train_text_dataloader = data['train-text']
+    if train_text_dataloader is None:
+        train_text_dataloader = _DummyS3Dataloader()
     else:
-        _, train_s3_dataloader = train_s3_dataloader
+        _, train_text_dataloader = train_text_dataloader
+
+    train_image_dataloader = data['train-image']
+    if train_image_dataloader is None:
+        train_image_dataloader = _DummyWDSDataloader()
 
     train_mtl_dataloader = data['train-mtl']
     if train_mtl_dataloader is None:
-        train_mtl_dataloader = _DummyDataloader()
+        train_mtl_dataloader = _DummyS3Dataloader()
     else:
         _, train_mtl_dataloader = train_mtl_dataloader
 
@@ -128,12 +140,14 @@ def train_one_epoch(
     # training loop
     for i, (
         (images, texts),
-        (_, (s3batch, __)),
+        (_, (text_pairs, __)),
+        (images_left, images_right),
         (mtldataset, (mtlbatch, mtllabels)),
     ) in enumerate(
         zip(
             train_dataloader,
-            islice(train_s3_dataloader, 1, None),
+            islice(train_text_dataloader, 1, None),
+            train_image_dataloader,
             islice(train_mtl_dataloader, 1, None),
         )
     ):
@@ -145,15 +159,25 @@ def train_one_epoch(
 
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
+        allimages = [images]
         alltexts = [texts]
+
         batch_size = texts.shape[0]
-        s3_batch_size = 0
+        texts_batch_size = 0
+        images_batch_size = 0
         mtl_batch_size = 0
-        if s3batch:
-            s3_batch_size = s3batch[0]['input_ids'].shape[0] // 2
-            for sb in s3batch:
-                sb.to(device=device)
-                alltexts.append(sb['input_ids'])
+        if text_pairs:
+            texts_batch_size = text_pairs[0]['input_ids'].shape[0] // 2
+            for tp in text_pairs:
+                tp.to(device=device)
+                alltexts.append(tp['input_ids'])
+
+        if images_left and images_right:
+            images_batch_size = images_left.shape[0] // 2
+            images_left.to(device=device)
+            images_right.to(device=device)
+            allimages.extend([images_left, images_right])
+
         if mtlbatch:
             mtl_batch_size = args.mtl_batch_size
             for mb in mtlbatch:
@@ -161,6 +185,7 @@ def train_one_epoch(
         if mtllabels:
             mtllabels[0] = [label.to(device=device) for label in mtllabels[0]]
 
+        allimages = torch.cat(allimages, dim=0)
         alltexts = torch.cat(alltexts, dim=0)
 
         _data_time_m.update(time.time() - start)
@@ -175,10 +200,10 @@ def train_one_epoch(
             # WITHOUT Gradient Accumulation
 
             with autocast():
-                modelout = model(images, alltexts)
+                modelout = model(allimages, alltexts)
                 if args.distill:
                     with torch.no_grad():
-                        distill_model_out = distill_model(images, alltexts)
+                        distill_model_out = distill_model(allimages, alltexts)
                     modelout.update(
                         {
                             'distill_left_features': distill_model_out[
@@ -189,21 +214,24 @@ def train_one_epoch(
                             ],
                         }
                     )
+
                 modelout['output_dict'] = True
                 logit_scale = modelout['logit_scale']
                 image_features = modelout.pop('image_features')
                 text_features = modelout.pop('text_features')
                 left_features = torch.cat(
                     [
-                        image_features,
-                        text_features[batch_size : batch_size + s3_batch_size,],
+                        image_features[:batch_size],
+                        text_features[batch_size : batch_size + texts_batch_size,],
+                        image_features[batch_size : batch_size + images_batch_size,],
                     ],
                     dim=0,
                 )
                 right_features = torch.cat(
                     [
                         text_features[:batch_size],
-                        text_features[batch_size + s3_batch_size :,],
+                        text_features[batch_size + texts_batch_size :,],
+                        image_features[batch_size + images_batch_size :],
                     ],
                     dim=0,
                 )
@@ -241,20 +269,24 @@ def train_one_epoch(
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
                 with autocast():
-                    modelout = model(images, alltexts)
+                    modelout = model(allimages, alltexts)
                     image_features = modelout.pop('image_features')
                     text_features = modelout.pop('text_features')
                     modelout['left_features'] = torch.cat(
                         [
-                            image_features,
-                            text_features[batch_size : batch_size + s3_batch_size,],
+                            image_features[:batch_size],
+                            text_features[batch_size : batch_size + texts_batch_size,],
+                            image_features[
+                                batch_size : batch_size + images_batch_size,
+                            ],
                         ],
                         dim=0,
                     )
                     modelout['right_features'] = torch.cat(
                         [
                             text_features[:batch_size],
-                            text_features[batch_size + s3_batch_size :,],
+                            text_features[batch_size + texts_batch_size :,],
+                            image_features[batch_size + images_batch_size :],
                         ],
                         dim=0,
                     )
@@ -282,7 +314,7 @@ def train_one_epoch(
                         else:
                             accum_mtl_labels.append(mtllabels)
 
-                accum_images.append(images)
+                accum_images.append(allimages)
                 accum_texts.append(alltexts)
                 if mtl_losses is not None:
                     accum_mtl_datasets.append(mtldataset)
@@ -323,24 +355,28 @@ def train_one_epoch(
 
             for k in range(args.accum_freq):
                 with autocast():
-                    images = accum_images[k]
+                    allimages = accum_images[k]
                     alltexts = accum_texts[k]
 
-                    modelout = model(images, alltexts)
+                    modelout = model(allimages, alltexts)
                     modelout['output_dict'] = True
                     image_features = modelout.pop('image_features')
                     text_features = modelout.pop('text_features')
                     modelout['left_features'] = torch.cat(
                         [
-                            image_features,
-                            text_features[batch_size : batch_size + s3_batch_size,],
+                            image_features[:batch_size],
+                            text_features[batch_size : batch_size + texts_batch_size,],
+                            image_features[
+                                batch_size : batch_size + images_batch_size,
+                            ],
                         ],
                         dim=0,
                     )
                     modelout['right_features'] = torch.cat(
                         [
                             text_features[:batch_size],
-                            text_features[batch_size + s3_batch_size :,],
+                            text_features[batch_size + texts_batch_size :,],
+                            image_features[batch_size + images_batch_size :],
                         ],
                         dim=0,
                     )
@@ -465,8 +501,8 @@ def train_one_epoch(
             ) = [], [], [], []
 
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.
-        # with torch.no_grad():
-        #     unwrap_model(model).logit_scale.clamp_(0, math.log(100))
+        with torch.no_grad():
+            unwrap_model(model).logit_scale.clamp_(0, math.log(100))
 
         _batch_time_m.update(time.time() - start)
         start = time.time()
@@ -477,13 +513,16 @@ def train_one_epoch(
             or batch_count == _num_batches_per_epoch
         ):
             num_samples = batch_count * batch_size * args.accum_freq * args.world_size
-            num_s3_samples = (
-                batch_count * s3_batch_size * args.accum_freq * args.world_size
+            num_text_samples = (
+                batch_count * texts_batch_size * args.accum_freq * args.world_size
+            )
+            num_image_samples = (
+                batch_count * images_batch_size * args.accum_freq * args.world_size
             )
             num_mtl_samples = (
                 batch_count * mtl_batch_size * args.accum_freq * args.world_size
             )
-            num_contrastive_samples = num_samples + num_s3_samples
+            num_contrastive_samples = num_samples + num_text_samples + num_image_samples
             num_total_samples = num_contrastive_samples + num_mtl_samples
 
             samples_per_epoch = train_dataloader.num_samples
@@ -507,12 +546,14 @@ def train_one_epoch(
             )
             samples_per_second = (
                 args.accum_freq
-                * (batch_size + mtl_batch_size)
+                * (batch_size + +texts_batch_size + images_batch_size + mtl_batch_size)
                 * args.world_size
                 / _batch_time_m.val
             )
             samples_per_second_per_gpu = (
-                args.accum_freq * (batch_size + mtl_batch_size) / _batch_time_m.val
+                args.accum_freq
+                * (batch_size + +texts_batch_size + images_batch_size + mtl_batch_size)
+                / _batch_time_m.val
             )
             last_layer_lr = optimizer.param_groups[-1]['lr']
             first_layer_lr = optimizer.param_groups[0]['lr']

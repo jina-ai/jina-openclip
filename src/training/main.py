@@ -254,30 +254,30 @@ def main(args):
     if args.freeze_temperature:
         _model_kwargs['freeze_logit_scale'] = True
 
-    model, preprocess_train, preprocess_val = create_model_and_transforms(
-        args.model,
-        args.pretrained,
-        precision=args.precision,
-        device=device,
-        jit=args.torchscript,
-        force_quick_gelu=args.force_quick_gelu,
-        force_custom_text=args.force_custom_text,
-        force_patch_dropout=args.force_patch_dropout,
-        force_image_size=args.force_image_size,
-        image_mean=args.image_mean,
-        image_std=args.image_std,
-        image_interpolation=args.image_interpolation,
-        image_resize_mode=args.image_resize_mode,
-        aug_cfg=args.aug_cfg,
-        pretrained_image=args.pretrained_image,
-        output_dict=True,
-        pretrained_hf=not args.hf_random_init,
-        **_model_kwargs,
+    model, preprocess_cfg, preprocess_train, preprocess_val = (
+        create_model_and_transforms(
+            args.model,
+            args.pretrained,
+            precision=args.precision,
+            device=device,
+            jit=args.torchscript,
+            force_quick_gelu=args.force_quick_gelu,
+            force_custom_text=args.force_custom_text,
+            force_patch_dropout=args.force_patch_dropout,
+            force_image_size=args.force_image_size,
+            image_mean=args.image_mean,
+            image_std=args.image_std,
+            image_interpolation=args.image_interpolation,
+            image_resize_mode=args.image_resize_mode,
+            aug_cfg=args.aug_cfg,
+            pretrained_image=args.pretrained_image,
+            output_dict=True,
+            pretrained_hf=not args.hf_random_init,
+            **_model_kwargs,
+        )
     )
     if args.distill:
-        # FIXME: currently assumes the model you're distilling from
-        #  has the same tokenizer & transforms.
-        distill_model, _, _ = create_model_and_transforms(
+        distill_model, _, _, _ = create_model_and_transforms(
             args.distill_model,
             args.distill_pretrained,
             device=device,
@@ -421,6 +421,7 @@ def main(args):
         preprocess_val,
         epoch=start_epoch,
         tokenizer=tokenizer,
+        preprocess_cfg=preprocess_cfg,
         mtl_losses=mtl_losses,
     )
     assert len(data), 'At least one train or eval dataset must be specified.'
