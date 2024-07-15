@@ -285,7 +285,7 @@ def create_model(
                     if isinstance(m, (LayerNorm, LayerNormFp32, nn.LayerNorm)):
                         m.weight.data = m.weight.data.to(torch.float32)
                         m.bias.data = m.bias.data.to(torch.float32)
-                    elif isinstance(m, nn.Parameter):
+                    elif isinstance(m, nn.Parameter) and m.ndim == 0:
                         m.data = m.data.to(torch.float32)
 
                 model.apply(_convert_back_to_fp32)
