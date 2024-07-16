@@ -113,7 +113,7 @@ def get_tokenizer(
     **kwargs,
 ):
     if model_name.startswith(HF_HUB_PREFIX):
-        model_name = model_name[len(HF_HUB_PREFIX) :]
+        model_name = model_name[len(HF_HUB_PREFIX):]
         try:
             config = _get_hf_config(model_name)['model_cfg']
         except Exception:
@@ -173,7 +173,7 @@ def create_model(
     preprocess_cfg = asdict(PreprocessCfg())
     has_hf_hub_prefix = model_name.startswith(HF_HUB_PREFIX)
     if has_hf_hub_prefix:
-        model_id = model_name[len(HF_HUB_PREFIX) :]
+        model_id = model_name[len(HF_HUB_PREFIX):]
         checkpoint_path = download_pretrained_from_hf(model_id, cache_dir=cache_dir)
         config = _get_hf_config(model_id, cache_dir)
         preprocess_cfg = merge_preprocess_dict(preprocess_cfg, config['preprocess_cfg'])
@@ -220,10 +220,13 @@ def create_model(
             # override model config's image size
             model_cfg['vision_cfg']['image_size'] = force_image_size
 
-        is_timm_model = 'timm_model_name' in model_cfg.get('vision_cfg', {})
+        is_timm_vision_model = 'timm_model_name' in model_cfg.get('vision_cfg', {})
+        is_eva_vision_model = 'eva_model_name' in model_cfg.get('vision_cfg', {})
         is_hf_vision_model = 'hf_vision_model_name' in model_cfg.get('vision_cfg', {})
+        is_hf_text_model = 'hf_model_name' in model_cfg.get('text_cfg', {})
+
         if pretrained_image:
-            if is_timm_model:
+            if is_timm_vision_model:
                 # pretrained weight loading for timm models set via vision_cfg
                 model_cfg['vision_cfg']['timm_model_pretrained'] = True
             elif is_hf_vision_model:
@@ -236,15 +239,14 @@ def create_model(
         # cast_dtype set for fp16 and bf16 (manual mixed-precision), not set for 'amp'
         # or 'pure' modes
         cast_dtype = get_cast_dtype(precision)
-        is_hf_model = 'hf_model_name' in model_cfg.get('text_cfg', {})
-        if is_hf_model:
+        if is_hf_text_model:
             # load pretrained weights for HF text model IFF no CLIP weights being loaded
             model_cfg['text_cfg']['hf_model_pretrained'] = (
                 pretrained_hf and not pretrained
             )
 
         custom_text = (
-            model_cfg.pop('custom_text', False) or force_custom_text or is_hf_model
+            model_cfg.pop('custom_text', False) or force_custom_text or is_hf_text_model
         )
 
         # merge cfg dict w/ kwargs (kwargs overrides cfg)
@@ -259,29 +261,41 @@ def create_model(
         else:
             model = CLIP(**model_cfg, cast_dtype=cast_dtype, cache_dir=cache_dir)
 
-        if precision in ('fp16', 'bf16'):
-            dtype = torch.float16 if 'fp16' in precision else torch.bfloat16
+        is_native_model = not (
+            is_timm_vision_model
+            or is_hf_vision_model
+            or is_hf_text_model
+            or is_eva_vision_model
+        )
+        if precision in ('fp16', 'bf16', 'float16', 'bfloat16'):
+            dtype = (
+                torch.float16 if precision in ('fp16', 'float16')
+                else torch.bfloat16
+            )
             # manual mixed precision that matches original OpenAI behaviour
-            if is_timm_model:
-                # FIXME this is a bit janky, create timm based model in low-precision
-                #  and then cast only LayerNormFp32 instances back to float32 so they
-                #  don't break. Why? The convert_weights_to_lp fn only works with
-                #  native models.
-                model.to(device=device, dtype=dtype)
-                from .transformer import LayerNormFp32
-
-                def _convert_ln(m):
-                    if isinstance(m, LayerNormFp32):
-                        m.weight.data = m.weight.data.to(torch.float32)
-                        m.bias.data = m.bias.data.to(torch.float32)
-
-                model.apply(_convert_ln)
-            else:
+            if is_native_model:
                 model.to(device=device)
                 convert_weights_to_lp(model, dtype=dtype)
-        elif precision in ('pure_fp16', 'pure_bf16'):
-            dtype = torch.float16 if 'fp16' in precision else torch.bfloat16
-            model.to(device=device, dtype=dtype)
+            else:
+                model.to(device=device, dtype=dtype)
+                from torch import nn
+                from .transformer import LayerNormFp32, LayerNorm
+
+                def _convert_back_to_fp32(m):
+                    if isinstance(m, (LayerNorm, LayerNormFp32, nn.LayerNorm)):
+                        m.weight.data = m.weight.data.to(torch.float32)
+                        m.bias.data = m.bias.data.to(torch.float32)
+                    elif isinstance(m, nn.Parameter) and m.ndim == 0:
+                        m.data = m.data.to(torch.float32)
+                    elif hasattr(m, 'logit_scale'):
+                        m.logit_scale.data = m.logit_scale.data.to(torch.float32)
+
+                model.apply(_convert_back_to_fp32)
+
+        elif precision in ('pure_fp16', 'pure_float16'):
+            model.to(device=device, dtype=torch.float16)
+        elif precision in ('pure_bf16', 'pure_bfloat16'):
+            model.to(device=device, dtype=torch.bfloat16)
         else:
             model.to(device=device, dtype=torch.float32)
 

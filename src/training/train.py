@@ -114,6 +114,8 @@ def train_one_epoch(
     train_image_dataloader = data['train-image']
     if train_image_dataloader is None:
         train_image_dataloader = _DummyWDSDataloader()
+    else:
+        train_image_dataloader = train_image_dataloader.dataloader
 
     train_mtl_dataloader = data['train-mtl']
     if train_mtl_dataloader is None:

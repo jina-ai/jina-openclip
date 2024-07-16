@@ -33,12 +33,6 @@ from .transformer import (
 )
 from .utils import to_2tuple
 
-try:
-    from apex.normalization import FusedLayerNorm
-except ModuleNotFoundError or ImportError:
-    FusedLayerNorm = LayerNorm
-    print("Please 'pip install apex'")
-
 
 @dataclass
 class CLIPVisionCfg:
@@ -161,9 +155,9 @@ class CLIPTextCfg:
 
 def get_cast_dtype(precision: str):
     cast_dtype = None
-    if precision == 'bf16':
+    if precision in {'bf16', 'bfloat16'}:
         cast_dtype = torch.bfloat16
-    elif precision == 'fp16':
+    elif precision in {'fp16', 'float16'}:
         cast_dtype = torch.float16
     return cast_dtype
 
@@ -324,7 +318,24 @@ def _build_vision_tower(
         )
     elif vision_cfg.eva_model_name:
         vision_heads = vision_cfg.width // vision_cfg.head_width
-        norm_layer = LayerNorm
+
+        if vision_cfg.fusedLN:
+            try:
+                from apex.normalization import FusedLayerNorm
+                norm_layer = FusedLayerNorm
+            except ModuleNotFoundError or ImportError:
+                norm_layer = (
+                    LayerNormFp32
+                    if cast_dtype in (torch.float16, torch.bfloat16)
+                    else LayerNorm
+                )
+                print("Please 'pip install apex'")
+        else:
+            norm_layer = (
+                LayerNormFp32
+                if cast_dtype in (torch.float16, torch.bfloat16)
+                else LayerNorm
+            )
 
         visual = EVAVisionTransformer(
             img_size=vision_cfg.image_size,
@@ -339,9 +350,7 @@ def _build_vision_tower(
             mlp_ratio=vision_cfg.mlp_ratio,
             qkv_bias=vision_cfg.qkv_bias,
             drop_path_rate=vision_cfg.drop_path_rate,
-            norm_layer=partial(FusedLayerNorm, eps=1e-6)
-            if vision_cfg.fusedLN
-            else partial(norm_layer, eps=1e-6),
+            norm_layer=partial(norm_layer, eps=1e-6),
             xattn=vision_cfg.xattn,
             rope=vision_cfg.rope,
             postnorm=vision_cfg.postnorm,
