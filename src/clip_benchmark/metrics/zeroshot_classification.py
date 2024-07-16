@@ -12,9 +12,10 @@ import torch.nn.functional as f
 import torch.utils.data
 from sklearn.metrics import balanced_accuracy_score, classification_report
 from tqdm import tqdm
+from training.utils import get_autocast
 
 
-def _zero_shot_classifier(model, tokenizer, classnames, templates, device, amp=True):
+def _zero_shot_classifier(model, tokenizer, classnames, templates, device, precision='amp'):
     """
     This function returns zero-shot vectors for each class in order
     to use it for zero-shot classification.
@@ -33,7 +34,7 @@ def _zero_shot_classifier(model, tokenizer, classnames, templates, device, amp=T
     torch.Tensor of shape (N,C) where N is the number
     of templates, and C is the number of classes.
     """
-    autocast = torch.cuda.amp.autocast if amp else suppress
+    autocast = get_autocast(precision)
     with torch.no_grad(), autocast():
         zeroshot_weights = []
         for classname in tqdm(classnames):
@@ -84,7 +85,7 @@ def accuracy(output, target, topk=(1,)):
     ]
 
 
-def _run_classification(model, classifier, dataloader, device, amp=True):
+def _run_classification(model, classifier, dataloader, device, precision='amp'):
     """
     Run zero-shot classifcation
 
@@ -100,7 +101,7 @@ def _run_classification(model, classifier, dataloader, device, amp=True):
         - pred (N, C) are the logits
         - true (N,) are the actual classes
     """
-    autocast = torch.cuda.amp.autocast if amp else suppress
+    autocast = get_autocast(precision)
     pred = []
     true = []
     with torch.no_grad():
@@ -174,7 +175,7 @@ def evaluate(
     classnames: list[str],
     templates: list[str],
     device: Union[str, torch.device],
-    amp: bool = True,
+    precision: str = 'amp',
     verbose: bool = False,
     save_clf: Optional[str] = None,
     load_clfs: Optional[list[str]] = None,
@@ -194,7 +195,7 @@ def evaluate(
     templates: list of str
         templates to use for zero-shot classification
     device: cpu/cuda
-    amp: whether to use automatic mixed precision
+    precision: floating point precision
     verbose: whether to use verbose model
     save_clf: -
     load_clfs: -
@@ -214,14 +215,14 @@ def evaluate(
         classifier = classifier.to(device)
     else:
         classifier = _zero_shot_classifier(
-            model, tokenizer, classnames, templates, device, amp=amp
+            model, tokenizer, classnames, templates, device, precision=precision
         )
 
     if save_clf is not None:
         torch.save(classifier, save_clf)
         # exit() - not sure if we want to exit here or not.
 
-    logits, target = _run_classification(model, classifier, dataloader, device, amp=amp)
+    logits, target = _run_classification(model, classifier, dataloader, device, precision=precision)
     is_multilabel = len(target.shape) == 2
 
     if is_multilabel:

@@ -66,7 +66,7 @@ def run_evaluation_task(
     batch_size: int = 64,
     num_workers: int = 4,
     seed: int = 0,
-    amp: bool = False,
+    precision: str = 'amp',
     distributed: bool = False,
     skip_existing: bool = False,
     recall_ks: Optional[list[int]] = None,
@@ -207,7 +207,7 @@ def run_evaluation_task(
             classnames,
             zeroshot_templates,
             device=device,
-            amp=amp,
+            precision=precision,
             verbose=True,
             save_clf=save_clf,
             load_clfs=load_clfs or [],
@@ -220,7 +220,7 @@ def run_evaluation_task(
             model.tokenizer,
             recall_k_list=recall_ks or DEFAULT_RECALL_KS,
             device=device,
-            amp=amp,
+            precision=precision,
         )
     elif task == 'image_caption_selection':
         metrics = image_caption_selection.evaluate(
@@ -228,7 +228,7 @@ def run_evaluation_task(
             dataloader,
             model.tokenizer,
             device=device,
-            amp=amp,
+            amp=precision,
         )
     elif task == 'linear_probe':
         assert linear_probe_train_split
@@ -292,7 +292,7 @@ def run_evaluation_task(
             val_dataloader=val_dataloader,
             device=device,
             normalize=normalize,
-            amp=amp,
+            amp=precision,
             verbose=True,
         )
     elif task == 'captioning':
