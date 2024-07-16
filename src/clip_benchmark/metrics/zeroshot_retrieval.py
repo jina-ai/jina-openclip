@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as f
 import torch.utils.data
 from tqdm import tqdm
+from training.utils import get_autocast
 
 
 def _dataloader_with_indices(dataloader):
@@ -58,7 +59,7 @@ def evaluate(
     dataloader: torch.utils.data.DataLoader,
     tokenizer: Any,
     device: Union[str, torch.device],
-    amp: bool = True,
+    precision: str = 'amp',
     recall_k_list: Optional[list[int]] = None,
 ):
     """
@@ -73,7 +74,7 @@ def evaluate(
     tokenizer:
         text tokenizer, i.e. convert list of strings to torch.Tensor of integers
     device: cpu/cuda
-    amp: whether to use automatic mixed precision
+    precision: floating point precision
     recall_k_list: list of int
         recall@k k's to use
     Returns
@@ -88,7 +89,7 @@ def evaluate(
     # have multiple corresponding texts
     texts_image_index = []
     dataloader = _dataloader_with_indices(dataloader)
-    autocast = torch.cuda.amp.autocast if amp else suppress
+    autocast = get_autocast(precision)
 
     for batch_images, batch_texts, inds in tqdm(dataloader):
         batch_images = batch_images.to(device)

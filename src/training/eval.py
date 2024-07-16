@@ -7,10 +7,10 @@ from typing import Any, Union
 import numpy as np
 import torch
 import torch.nn.functional as f
+from datasets import load_dataset
+from deepspeed import DeepSpeedEngine
 from loguru import logger
 from tqdm import tqdm
-
-from datasets import load_dataset
 
 try:
     import wandb
@@ -24,6 +24,7 @@ from open_clip import (
     get_input_dtype,
     get_tokenizer,
 )
+
 from training.distributed import is_master
 from training.utils import get_autocast
 
@@ -268,6 +269,7 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
                     transform=transform,
                 )
             ],
+            precision=args.precision,
             task='auto',
             output=None,
             dataset_root=args.clip_benchmark_dataset_root,
@@ -316,14 +318,17 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             self._batch_size = batch_size
             self._max_seq_length = max_seq_length
             self._device = device
-
-            if isinstance(clip_model, torch.nn.parallel.DistributedDataParallel):
+            print(clip_model)
+            if isinstance(clip_model, DeepSpeedEngine):
+                _model = clip_model.module
+            elif isinstance(clip_model, torch.nn.parallel.DistributedDataParallel):
                 _model = clip_model.module
             else:
                 _model = clip_model
 
             self._model = _model
 
+            print(_model)
             if isinstance(_model, CLIP) or isinstance(_model, CustomTextCLIP):
                 assert _tokenizer is not None
                 self._tokenizer = _tokenizer
@@ -362,12 +367,12 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
                 model_output, encoded_input['attention_mask']
             )
             sentence_embeddings = f.normalize(sentence_embeddings, p=2, dim=1)
-            return sentence_embeddings.cpu().numpy()
+            return sentence_embeddings.to(torch.float32).cpu().numpy()
 
         def _clip_embed(self, sentences: list[str]):
             x = self._tokenizer(sentences).to(self._device)
             sentence_embeddings = self._model.encode_text(x)
-            return sentence_embeddings.cpu().numpy()
+            return sentence_embeddings.to(torch.float32).cpu().numpy()
 
         @torch.no_grad()
         def encode(self, sentences: list[str], batch_size: int = 1, **_):
@@ -435,12 +440,12 @@ def _draw_similarity_graph(model, transform, tokenizer, epoch, args, step):
         img2txt_neg_sims = []
         txt2txt_neg_sims = []
         img2img_neg_sims = []
-        for img, query, doc in zip(images, _queries, _docs):
+        for img, query, doc in zip(_images, _queries, _docs):
             img2txt_pos_sims.append(img @ doc.T)
             txt2txt_pos_sims.append(query @ doc.T)
             img2txt_neg_sims.append(img @ random.choice(_docs).T)
             txt2txt_neg_sims.append(query @ random.choice(_docs).T)
-            img2img_neg_sims.append(img @ random.choice(images).T)
+            img2img_neg_sims.append(img @ random.choice(_images).T)
 
         return (
             img2txt_pos_sims,

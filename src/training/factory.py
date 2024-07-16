@@ -7,6 +7,8 @@ import torch
 from loguru import logger
 from open_clip.transform import PreprocessCfg
 from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
+
 from training.data import (
     InputType,
     MultiDataset,
@@ -24,7 +26,6 @@ from training.loss import (
     SigLIPLoss,
     ThreeTowersLoss,
 )
-from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 
 DEFAULT_CONTEXT_LENGTH = 77
 
@@ -375,7 +376,7 @@ def _create_s3_dataloader(
 def create_losses(args):
     loss = _create_contrastive_loss(args)
     mtllosses = None
-    if args.train_data_mtl:
+    if args.train_mtldata:
         mtllosses = _create_mtl_losses(args)
     return loss, mtllosses
 
