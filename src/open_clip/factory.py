@@ -287,6 +287,8 @@ def create_model(
                         m.bias.data = m.bias.data.to(torch.float32)
                     elif isinstance(m, nn.Parameter) and m.ndim == 0:
                         m.data = m.data.to(torch.float32)
+                    elif hasattr(m, 'logit_scale'):
+                        m.logit_scale.data = m.logit_scale.data.to(torch.float32)
 
                 model.apply(_convert_back_to_fp32)
 
