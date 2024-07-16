@@ -318,17 +318,17 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             self._batch_size = batch_size
             self._max_seq_length = max_seq_length
             self._device = device
-
+            print(clip_model)
             if isinstance(clip_model, DeepSpeedEngine):
-                clip_model = clip_model.module
-
-            if isinstance(clip_model, torch.nn.parallel.DistributedDataParallel):
+                _model = clip_model.module
+            elif isinstance(clip_model, torch.nn.parallel.DistributedDataParallel):
                 _model = clip_model.module
             else:
                 _model = clip_model
 
             self._model = _model
 
+            print(_model)
             if isinstance(_model, CLIP) or isinstance(_model, CustomTextCLIP):
                 assert _tokenizer is not None
                 self._tokenizer = _tokenizer
