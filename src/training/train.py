@@ -174,10 +174,10 @@ def train_one_epoch(
                 tp.to(device=device)
                 alltexts.append(tp['input_ids'])
 
-        if images_left and images_right:
-            images_batch_size = images_left.shape[0] // 2
-            images_left.to(device=device)
-            images_right.to(device=device)
+        if (images_left is not None) and (images_right is not None):
+            images_batch_size = images_left.shape[0]
+            images_left = images_left.to(device=device)
+            images_right = images_right.to(device=device)
             allimages.extend([images_left, images_right])
 
         if mtlbatch:

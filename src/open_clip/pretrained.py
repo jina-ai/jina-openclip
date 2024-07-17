@@ -465,6 +465,7 @@ _PRETRAINED = {
         ),
         b16=_pcfg(hf_hub='QuanSun/EVA-CLIP/EVA02_B_psz14to16.pt'),
         l14=_pcfg(hf_hub='QuanSun/EVA-CLIP/EVA02_L_psz14.pt'),
+        l14_336=_pcfg(hf_hub='QuanSun/EVA-CLIP/EVA02_CLIP_L_psz14_224to336.pt'),
     ),
     'ViT-B-16-SigLIP': dict(
         webli=_slpcfg(hf_hub='timm/ViT-B-16-SigLIP/'),
