@@ -20,6 +20,7 @@ except ImportError:
     tensorboard = None
 
 from open_clip import create_model_and_transforms, get_tokenizer
+
 from training.distributed import broadcast_object, init_distributed_device, is_master
 from training.eval import evaluate
 from training.factory import create_dataloaders, create_losses
@@ -572,13 +573,13 @@ def main(args):
                     args.checkpoint_path, _ckpt_dir, 'state.pt'
                 )
                 torch.save(_checkpoint_dict, _model_ckpt_path)
-                if data['train-s3'] is not None:
+                if data['train-text'] is not None:
                     dataset_ckpt_path = os.path.join(
                         args.checkpoint_path,
                         _ckpt_dir,
                         f'worker{args.rank}-s3-dataset.json',
                     )
-                    data['train-s3'][0].write_to_json(dataset_ckpt_path)
+                    data['train-text'][0].write_to_json(dataset_ckpt_path)
                 if data['train-mtl'] is not None:
                     dataset_ckpt_path = os.path.join(
                         args.checkpoint_path,
