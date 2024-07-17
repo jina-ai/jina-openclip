@@ -1,16 +1,18 @@
 import json
+import math
 import os
 import random
 from collections.abc import MutableMapping
-from typing import Any, Union
+from typing import Any, List, Union, cast
 
 import numpy as np
 import torch
 import torch.nn.functional as f
 from loguru import logger
+from PIL import Image
 from tqdm import tqdm
 
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 
 try:
     import wandb
@@ -374,7 +376,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             embeddings = []
             with torch.inference_mode():
                 for i in range(0, len(sentences), batch_size):
-                    batch = sentences[i : i + batch_size]
+                    batch = sentences[i: i + batch_size]
                     embeddings.append(self._embed(batch))
 
             return np.concatenate(embeddings, axis=0)
@@ -418,6 +420,142 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             )
 
     logger.info('Finished MTEB benchmark!')
+    logger.info('--------------------------------------------------------------------')
+
+    return metrics
+
+
+def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
+    if args.vidore_benchmark_frequency == 0 or (
+        (epoch % args.vidore_benchmark_frequency) != 0 and epoch != args.epochs
+    ):
+        return {}
+
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting the Vidore benchmark ...')
+
+    # sanity check
+    if args.vidore_dataset_name is None and args.vidore_collection_name is None:
+        raise ValueError('Please provide a dataset name or collection name')
+    elif (
+        args.vidore_dataset_name is not None and args.vidore_collection_name is not None
+    ):
+        raise ValueError('Please provide only one of dataset name or collection name')
+
+    import huggingface_hub
+    from vidore_benchmark.retrievers import VisionRetriever
+    from vidore_benchmark.evaluation.evaluate import evaluate_dataset
+    from vidore_benchmark.utils.iter_utils import batched
+    from vidore_benchmark.utils.torch_utils import get_torch_device
+
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        module = model.module
+    else:
+        module = model
+
+    autocast = get_autocast(args.precision)
+
+    class VidoreOpenCLIPRetriever(VisionRetriever):
+        def __init__(self):
+            super().__init__()
+            self.device = get_torch_device(args.device)
+            self.model = module
+            self.tokenizer = tokenizer
+            self.transform = transform
+
+        @property
+        def use_visual_embedding(self) -> bool:
+            return True
+
+        def forward_queries(
+            self, queries, batch_size: int, **kwargs
+        ) -> List[torch.Tensor]:
+
+            list_emb_queries: List[torch.Tensor] = []
+            with torch.no_grad(), autocast():
+                for query_batch in tqdm(
+                    batched(queries, batch_size),
+                    desc='Query batch',
+                    total=math.ceil(len(queries) / batch_size)
+                ):
+                    query_batch = cast(List[str], query_batch)
+                    inputs_queries = self.tokenizer(query_batch).to(self.device)
+                    qs = self.model.encode_text(inputs_queries)
+                    qs /= qs.norm(dim=-1, keepdim=True)
+                    list_emb_queries.append(qs)
+
+            return list_emb_queries
+
+        def forward_documents(
+            self, documents, batch_size: int, **kwargs
+        ) -> List[torch.Tensor]:
+
+            list_emb_documents: List[torch.Tensor] = []
+            with torch.no_grad(), torch.cuda.amp.autocast():
+                for doc_batch in tqdm(
+                    batched(documents, batch_size),
+                    desc='Document batch',
+                    total=math.ceil(len(documents) / batch_size)
+                ):
+                    doc_batch = cast(List[Image.Image], doc_batch)
+                    list_doc = [document.convert("RGB") for document in doc_batch if
+                                isinstance(document, Image.Image)]
+                    input_image_processed = torch.cat(
+                        [
+                            self.transform(d).unsqueeze(0).to(self.device)
+                            for d in list_doc
+                        ],
+                        dim=0
+                    )
+                    ps = self.model.encode_image(input_image_processed)
+                    ps /= ps.norm(dim=-1, keepdim=True)
+                    list_emb_documents.append(ps)
+
+            return list_emb_documents
+
+        def get_scores(
+            self,
+            list_emb_queries: List[torch.Tensor],
+            list_emb_documents: List[torch.Tensor],
+        ) -> torch.Tensor:
+            emb_queries = torch.cat(list_emb_queries, dim=0)
+            emb_documents = torch.cat(list_emb_documents, dim=0)
+            scores = torch.einsum('bd,cd->bc', emb_queries, emb_documents)
+            return scores
+
+    retriever = VidoreOpenCLIPRetriever()
+    metrics = {}
+
+    if args.vidore_dataset_name is not None:
+        dataset = cast(Dataset, load_dataset(
+            args.vidore_dataset_name, split=args.vidore_dataset_split
+        ))
+        with autocast():
+            metrics = evaluate_dataset(
+                retriever,
+                dataset,
+                batch_query=args.vidore_queries_batch_size,
+                batch_doc=args.vidore_documents_batch_size,
+            )
+
+    elif args.vidore_collection_name is not None:
+        collection = huggingface_hub.get_collection(args.vidore_collection_name)
+        datasets = collection.items
+        with autocast():
+            for dataset in datasets:
+                logger.info(f'Evaluating {dataset.item_id} ...')
+                dataset = cast(
+                    Dataset,
+                    load_dataset(dataset.item_id, split=args.vidore_dataset_split)
+                )
+            metrics = evaluate_dataset(
+                retriever,
+                dataset,
+                batch_query=args.vidore_queries_batch_size,
+                batch_doc=args.vidore_documents_batch_size,
+            )
+
+    logger.info('Finished Vidore benchmark!')
     logger.info('--------------------------------------------------------------------')
 
     return metrics
@@ -548,6 +686,11 @@ def evaluate(
 
     mteb_metrics = _run_mteb_benchmark(model, tokenizer, epoch, args)
     metrics.update({f'mteb-{k}': v for k, v in mteb_metrics.items()})
+
+    vidore_benchmark_metrics = _run_vidore_benchmark(
+        model, tokenizer, transform, epoch, args
+    )
+    metrics.update({f'vidore-{k}': v for k, v in vidore_benchmark_metrics.items()})
 
     _draw_similarity_graph(model, transform, tokenizer, epoch, args, step)
 

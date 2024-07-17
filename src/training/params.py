@@ -793,6 +793,12 @@ def parse_args(args):
         help='How often (in epochs) to run evaluation on MTEB.',
     )
     parser.add_argument(
+        '--vidore-benchmark-frequency',
+        type=int,
+        default=1,
+        help='How often (in epochs) to run evaluation on the Vidore benchmark.',
+    )
+    parser.add_argument(
         '--simgraph-frequency',
         type=int,
         default=1,
@@ -866,6 +872,39 @@ def parse_args(args):
         type=int,
         default=8192,
         help='The max sequence length that will be used during MTEB evaluation.',
+    )
+    parser.add_argument(
+        '--vidore-dataset-name',
+        type=str,
+        default=None,
+        help='Define a Vidore benchmark dataset to evaluate on.',
+    )
+    parser.add_argument(
+        '--vidore-dataset-split',
+        type=str,
+        default='test',
+        help='Define a Vidore benchmark dataset split to evaluate on.',
+    )
+    parser.add_argument(
+        '--vidore-collection-name',
+        type=str,
+        default='vidore/vidore-**benchmark**-667173f98e70a1c0fa4db00d',
+        help=(
+            'Define a Vidore benchmark dataset collection to evaluate on. '
+            'Mutually exclusive with --vidore-dataset-name'
+        ),
+    )
+    parser.add_argument(
+        '--vidore-queries-batch-size',
+        type=str,
+        default=None,
+        help='Define the batch size for the queries encoding on the Vidore benchmark.',
+    )
+    parser.add_argument(
+        '--vidore-documents-batch-size',
+        type=str,
+        default=None,
+        help='Define the batch size for the documents encoding on the Vidore benchmark.'
     )
 
     args = parser.parse_args(args)
