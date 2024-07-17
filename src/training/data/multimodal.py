@@ -390,7 +390,7 @@ def _custom_webdataset_sampling_stage(data, use_long_captions: bool = False):
         for lang, caption in captions.items():
             newsample = deepcopy(sample)
             newsample['text'] = caption
-            _ = newsample.pop('json')
+            _ = newsample.pop('json', None)
             newsample['language'] = lang
             yield newsample
 
