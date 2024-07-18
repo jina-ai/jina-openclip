@@ -7,7 +7,7 @@ import torch.utils.data
 from torch import nn
 from training.distributed import world_info_from_env
 
-from clip_benchmark.dataset import (
+from clip_benchmark.datasets.dataset import (
     build_dataset,
     get_dataset_collate_fn,
     get_dataset_default_task,
@@ -228,7 +228,7 @@ def run_evaluation_task(
             dataloader,
             model.tokenizer,
             device=device,
-            amp=precision,
+            amp=(precision == 'amp'),
         )
     elif task == 'linear_probe':
         assert linear_probe_train_split
@@ -292,7 +292,7 @@ def run_evaluation_task(
             val_dataloader=val_dataloader,
             device=device,
             normalize=normalize,
-            amp=precision,
+            amp=(precision == 'amp'),
             verbose=True,
         )
     elif task == 'captioning':

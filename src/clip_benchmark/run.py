@@ -5,7 +5,7 @@ from typing import Any, List, Optional, Union
 
 from training.distributed import world_info_from_env
 
-from clip_benchmark.dataset import (
+from clip_benchmark.datasets.dataset import (
     LanguageNotSupportedError,
     dataset_collection,
     get_dataset_collection_from_file,

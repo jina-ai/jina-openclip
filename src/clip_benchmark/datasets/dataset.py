@@ -244,9 +244,9 @@ def build_dataset(
     """
 
     use_classnames_and_templates = task in ('zeroshot_classification', 'linear_probe')
+    current_folder = os.path.dirname(__file__)
 
     if use_classnames_and_templates:  # Only load templates and classnames if we have to
-        current_folder = os.path.dirname(__file__)
 
         # Load <LANG>_classnames.json (packaged with CLIP benchmark that are used by
         # default)
@@ -363,7 +363,7 @@ def build_dataset(
         )
         if default_classnames is None:
             raise LanguageNotSupportedError(
-                f"Language '{language}' not supported for Babel-ImageNet"
+                f"Language '{language}' not supported for ImageNet1K"
             )
         ds.classes = default_classnames['imagenet1k']
 
