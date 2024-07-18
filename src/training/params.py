@@ -802,16 +802,9 @@ def parse_args(args):
         '--clip-benchmark-datasets',
         type=str,
         default=(
-            'imagenet1k,'
-            'imagenetv2,'
-            'babel_imagenet,'
-            'mscoco_captions,'
-            'multilingual_mscoco_captions,'
-            'flickr8k,'
-            'flickr30k,'
-            'flickr30k-200,'
-            'crossmodal3600,'
-            'xtd200,'
+            'imagenet1k,imagenetv2,babel_imagenet,mscoco_captions,'
+            'multilingual_mscoco_captions,flickr8k,flickr30k,flickr30k-200,'
+            'crossmodal3600,xtd200'
         ),
         help='Specify a comma separated list of datasets to use in CLIP benchmark.',
     )
@@ -820,6 +813,12 @@ def parse_args(args):
         type=str,
         default='en',
         help='Specify CLIP Benchmark languages.',
+    )
+    parser.add_argument(
+        '--clip-benchmark-dataset-root',
+        type=str,
+        default='./clip_benchmark_datasets/',
+        help='Specify CLIP Benchmark datasets root path.',
     )
     parser.add_argument(
         '--clip-benchmark-recall-ks',
