@@ -215,6 +215,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     logger.info('--------------------------------------------------------------------')
     logger.info('Starting the MTEB benchmark ...')
 
+    import iso639
     from mteb import MTEB, get_tasks
     from open_clip.model import CLIP, CustomTextCLIP
     from transformers import AutoTokenizer
@@ -310,7 +311,9 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
 
     metrics = {}
     tasks = args.mteb_tasks.split(',')
-    langs = args.mteb_languages.split(',')
+    langs = [
+        iso639.Language.match(lang).part3  for lang in args.mteb_languages.split(',')
+    ]
     select_metrics = set(args.mteb_metrics.split(','))
     autocast = get_autocast(args.precision)
 
