@@ -2,8 +2,8 @@ import json
 import math
 import os
 import random
-from collections.abc import MutableMapping
-from typing import Any, List, Union, cast
+from collections import defaultdict
+from typing import Any, Dict, List, Set, Union, cast
 
 import numpy as np
 import torch
@@ -19,18 +19,9 @@ try:
 except ImportError:
     wandb = None
 
-from open_clip import (
-    IMAGENET_CLASSNAMES,
-    OPENAI_IMAGENET_TEMPLATES,
-    build_zero_shot_classifier,
-    get_input_dtype,
-    get_tokenizer,
-)
-
+from open_clip import get_input_dtype
 from training.distributed import is_master
 from training.utils import get_autocast
-
-MTEB_LOGGING_METRICS = ['ndcg_at_10', 'cos_sim']
 
 
 def _get_clip_metrics(image_features, text_features, logit_scale):
@@ -58,6 +49,17 @@ def _maybe_compute_generative_loss(model_out):
         token_logits = model_out['logits']
         token_labels = model_out['labels']
         return f.cross_entropy(token_logits.permute(0, 2, 1), token_labels)
+
+
+def _filter_metrics(_metrics: Dict[str, float], select_metrics: Set[str]):
+    _filtered_metrics = {}
+    for key, value in _metrics.items():
+        if len(select_metrics) > 0 and key not in select_metrics:
+            continue
+        if isinstance(value, float):
+            _filtered_metrics[key] = value
+
+    return _filtered_metrics
 
 
 def _run_validation(model, data, epoch, args):
@@ -153,94 +155,6 @@ def _run_validation(model, data, epoch, args):
     return metrics
 
 
-def _accuracy(output, target, topk=(1,)):
-    pred = output.topk(max(topk), 1, True, True)[1].t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
-    return [
-        float(correct[:k].reshape(-1).float().sum(0, keepdim=True).cpu().numpy())
-        for k in topk
-    ]
-
-
-def _run_classifier(model, classifier, dataloader, args):
-    autocast = get_autocast(args.precision)
-    input_dtype = get_input_dtype(args.precision)
-
-    with torch.no_grad():
-        top1, top5, n = 0.0, 0.0, 0.0
-        for images, target in tqdm(dataloader, unit_scale=args.batch_size):
-            images = images.to(device=args.device, dtype=input_dtype)
-            target = target.to(args.device)
-
-            with autocast():
-                # predict
-                output = model(image=images)
-                image_features = (
-                    output['image_features'] if isinstance(output, dict) else output[0]
-                )
-                logits = 100.0 * image_features @ classifier
-
-            # measure accuracy
-            acc1, acc5 = _accuracy(logits, target, topk=(1, 5))
-            top1 += acc1
-            top5 += acc5
-            n += images.size(0)
-
-    top1 = top1 / n
-    top5 = top5 / n
-    return top1, top5
-
-
-def _run_zeroshot_evaluation(model, data, epoch, args, tokenizer=None):
-    if (
-        ('imagenet-val' not in data and 'imagenet-v2' not in data)
-        or args.zeroshot_frequency == 0
-        or ((epoch % args.zeroshot_frequency) != 0 and epoch != args.epochs)
-    ):
-        return {}
-
-    if args.distributed and not args.horovod:
-        model = model.module
-
-    logger.info('--------------------------------------------------------------------')
-    logger.info('Starting zero-shot evaluation on ImageNet ...')
-    if tokenizer is None:
-        tokenizer = get_tokenizer(args.model)
-
-    logger.info('Building zero-shot classifier ...')
-    autocast = get_autocast(args.precision)
-    with autocast():
-        classifier = build_zero_shot_classifier(
-            model,
-            tokenizer=tokenizer,
-            classnames=IMAGENET_CLASSNAMES,
-            templates=OPENAI_IMAGENET_TEMPLATES,
-            num_classes_per_batch=10,
-            device=args.device,
-            use_tqdm=True,
-        )
-
-    logger.info('Using classifier ...')
-    results = {}
-    if 'imagenet-val' in data:
-        top1, top5 = _run_classifier(
-            model, classifier, data['imagenet-val'].dataloader, args
-        )
-        results['imagenet-zeroshot-top1'] = top1
-        results['imagenet-zeroshot-top5'] = top5
-    if 'imagenet-v2' in data:
-        top1, top5 = _run_classifier(
-            model, classifier, data['imagenet-v2'].dataloader, args
-        )
-        results['imagenetv2-zeroshot-top1'] = top1
-        results['imagenetv2-zeroshot-top5'] = top5
-
-    logger.info('Finished zero-shot evaluation!')
-    logger.info('--------------------------------------------------------------------')
-
-    return results
-
-
 def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
     if args.clip_benchmark_frequency == 0 or (
         (epoch % args.clip_benchmark_frequency) != 0 and epoch != args.epochs
@@ -304,7 +218,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     from open_clip.model import CLIP, CustomTextCLIP
     from transformers import AutoTokenizer
 
-    class _MTEBModel(torch.nn.Module):
+    class _MTEBEncoder(torch.nn.Module):
         def __init__(
             self,
             clip_model: torch.nn.Module,
@@ -314,7 +228,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             max_seq_length: int = 8192,
             device: Union[str, torch.device] = 'cpu',
         ):
-            super(_MTEBModel, self).__init__()
+            super(_MTEBEncoder, self).__init__()
 
             self._tokenizer = None
             self._batch_size = batch_size
@@ -386,17 +300,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
 
             return np.concatenate(embeddings, axis=0)
 
-    def flatten(dictionary, parent_key='', separator='_'):
-        items = []
-        for key, value in dictionary.items():
-            new_key = parent_key + separator + key if parent_key else key
-            if isinstance(value, MutableMapping):
-                items.extend(flatten(value, new_key, separator=separator).items())
-            else:
-                items.append((new_key, value))
-        return dict(items)
-
-    _mteb_model = _MTEBModel(
+    _mteb_model = _MTEBEncoder(
         clip_model=model,
         _tokenizer=tokenizer,
         max_seq_length=args.mteb_max_sequence_length,
@@ -404,25 +308,30 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     )
 
     metrics = {}
+    tasks = args.mteb_tasks.split(',')
+    langs = args.mteb_languages.split(',')
+    select_metrics = set(args.mteb_metrics.split(','))
     autocast = get_autocast(args.precision)
+
     with autocast():
-        for task in args.mteb_tasks.split(','):
-            evaluation = MTEB(tasks=[task], task_langs=args.mteb_languages.split(','))
+        for task in tasks:
+            split = 'dev' if task == 'MSMARCO' else 'test'
+            evaluation = MTEB(tasks=[task], task_langs=langs)
             results = evaluation.run(
-                _mteb_model,
-                batch_size=16,
+                model=_mteb_model,
+                verbosity=0,
+                eval_splits=[split],
+                encode_kwargs={'batch_size': args.mteb_batch_size},
                 output_folder=None,
-                eval_splits=['dev'] if task == 'MSMARCO' else ['test'],
                 ignore_identical_ids=False,
             )
-            metrics.update(
-                {
-                    k: v
-                    for k, v in flatten(results, separator='-').items()
-                    if isinstance(v, float)
-                    and any(sub in k for sub in MTEB_LOGGING_METRICS)
-                }
-            )
+            results = results[0].scores
+            for split, _results in results.items():
+                for scores in _results:
+                    subset = scores['hf_subset'].replac('-', '_')
+                    mteb_metrics = _filter_metrics(scores, select_metrics)
+                    for k, v in mteb_metrics.items():
+                        metrics[f'{task}-{subset}-{split}-{k}'] = v
 
     logger.info('Finished MTEB benchmark!')
     logger.info('--------------------------------------------------------------------')
@@ -503,8 +412,10 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
                     total=math.ceil(len(documents) / batch_size)
                 ):
                     doc_batch = cast(List[Image.Image], doc_batch)
-                    list_doc = [document.convert("RGB") for document in doc_batch if
-                                isinstance(document, Image.Image)]
+                    list_doc = [
+                        document.convert('RGB') for document in doc_batch
+                        if isinstance(document, Image.Image)
+                    ]
                     input_image_processed = torch.cat(
                         [
                             self.transform(d).unsqueeze(0).to(self.device)
@@ -528,37 +439,49 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
             scores = torch.einsum('bd,cd->bc', emb_queries, emb_documents)
             return scores
 
+    _select_metrics = set(args.vidore_metrics.split(','))
+
     retriever = VidoreOpenCLIPRetriever()
     metrics = {}
 
-    if args.vidore_dataset_name is not None:
-        dataset = cast(Dataset, load_dataset(
-            args.vidore_dataset_name, split=args.vidore_dataset_split
-        ))
+    _batchsize = args.vidore_batch_size
+    _dataset_name = args.vidore_dataset_name
+    _collection_name = args.vidore_collection_name
+    _dataset_split = args.vidore_dataset_split
+
+    if _dataset_name is not None:
+
+        dataset_id = _dataset_name
+        logger.info(f'Evaluating {dataset_id} ...')
+        dataset = cast(Dataset, load_dataset(dataset_id, split=_dataset_split))
         with autocast():
             metrics = evaluate_dataset(
-                retriever,
-                dataset,
-                batch_query=args.vidore_queries_batch_size,
-                batch_doc=args.vidore_documents_batch_size,
+                retriever, dataset, batch_query=_batchsize, batch_doc=_batchsize,
             )
+        metrics = _filter_metrics(metrics, _select_metrics)
+        metrics = {f'{dataset_id}-{k}': v for k, v in metrics.items()}
 
-    elif args.vidore_collection_name is not None:
-        collection = huggingface_hub.get_collection(args.vidore_collection_name)
+    elif _collection_name is not None:
+
+        collection = huggingface_hub.get_collection(_collection_name)
         datasets = collection.items
+        metrics = {}
+        averages = defaultdict(list)
         with autocast():
             for dataset in datasets:
-                logger.info(f'Evaluating {dataset.item_id} ...')
-                dataset = cast(
-                    Dataset,
-                    load_dataset(dataset.item_id, split=args.vidore_dataset_split)
+                dataset_id = dataset.item_id
+                logger.info(f'Evaluating {dataset_id} ...')
+                dataset = cast(Dataset, load_dataset(dataset_id, split=_dataset_split))
+                dataset_metrics = evaluate_dataset(
+                    retriever, dataset, batch_query=_batchsize, batch_doc=_batchsize
                 )
-            metrics = evaluate_dataset(
-                retriever,
-                dataset,
-                batch_query=args.vidore_queries_batch_size,
-                batch_doc=args.vidore_documents_batch_size,
-            )
+                dataset_metrics = _filter_metrics(dataset_metrics, _select_metrics)
+                for k, v in dataset_metrics.items():
+                    averages[k].append(v)
+                    metrics[f'{dataset_id}-{k}'] = v
+
+            for k, v in averages.items():
+                metrics[f'avg-{k}'] = sum(v) / len(v)
 
     logger.info('Finished Vidore benchmark!')
     logger.info('--------------------------------------------------------------------')
@@ -675,11 +598,6 @@ def evaluate(
     model.eval()
 
     logger.info('--------------------------- EVALUATION -----------------------------')
-
-    zero_shot_metrics = _run_zeroshot_evaluation(
-        model, data, epoch, args, tokenizer=tokenizer
-    )
-    metrics.update({f'zeroshot-{k}': v for k, v in zero_shot_metrics.items()})
 
     val_metrics = _run_validation(model, data, epoch, args)
     metrics.update({f'valset-{k}': v for k, v in val_metrics.items()})

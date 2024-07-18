@@ -318,6 +318,8 @@ def build_dataset(
 
     if language != 'en':
         if dataset_name not in {
+            'imagenet1k',
+            'imagenetv2',
             'babel_imagenet',
             'multilingual_mscoco_captions',
             'flickr30k',
@@ -359,6 +361,10 @@ def build_dataset(
         ds = ImageNet(
             root=root, split='train' if train else 'val', transform=transform, **kwargs
         )
+        if default_classnames is None:
+            raise LanguageNotSupportedError(
+                f"Language '{language}' not supported for Babel-ImageNet"
+            )
         ds.classes = default_classnames['imagenet1k']
 
     elif dataset_name == 'imagenet-w':
@@ -435,6 +441,10 @@ def build_dataset(
         ds = imagenetv2.ImageNetV2Dataset(
             variant='matched-frequency', transform=transform, location=root
         )
+        if default_classnames is None:
+            raise LanguageNotSupportedError(
+                f"Language '{language}' not supported for Babel-ImageNet"
+            )
         ds.classes = default_classnames['imagenet1k']
 
     elif dataset_name == 'imagenet_sketch':
