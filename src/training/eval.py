@@ -3,7 +3,7 @@ import math
 import os
 import random
 from collections import defaultdict
-from typing import Any, Dict, List, Set, Union, cast
+from typing import Any, Dict, List, Optional, Set, Union, cast
 
 import numpy as np
 import torch
@@ -215,7 +215,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     logger.info('--------------------------------------------------------------------')
     logger.info('Starting the MTEB benchmark ...')
 
-    from mteb import MTEB
+    from mteb import MTEB, get_tasks
     from open_clip.model import CLIP, CustomTextCLIP
     from transformers import AutoTokenizer
 
@@ -317,7 +317,8 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     with autocast():
         for task in tasks:
             split = 'dev' if task == 'MSMARCO' else 'test'
-            evaluation = MTEB(tasks=[task], task_langs=langs)
+            mteb_tasks = get_tasks(tasks=[task], languages=langs)
+            evaluation = MTEB(tasks=mteb_tasks)
             results = evaluation.run(
                 model=_mteb_model,
                 verbosity=0,
@@ -434,6 +435,7 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
             self,
             list_emb_queries: List[torch.Tensor],
             list_emb_documents: List[torch.Tensor],
+            batch_size: Optional[int] = None,
         ) -> torch.Tensor:
             emb_queries = torch.cat(list_emb_queries, dim=0)
             emb_documents = torch.cat(list_emb_documents, dim=0)
