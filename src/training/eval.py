@@ -185,6 +185,7 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
                     transform=transform,
                 )
             ],
+            batch_size=args.clip_benchmark_batch_size,
             precision=args.precision,
             task='auto',
             output=None,
@@ -328,7 +329,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             results = results[0].scores
             for split, _results in results.items():
                 for scores in _results:
-                    subset = scores['hf_subset'].replac('-', '_')
+                    subset = scores['hf_subset'].replace('-', '_')
                     mteb_metrics = _filter_metrics(scores, select_metrics)
                     for k, v in mteb_metrics.items():
                         metrics[f'{task}-{subset}-{split}-{k}'] = v

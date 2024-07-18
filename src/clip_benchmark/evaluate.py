@@ -208,7 +208,7 @@ def run_evaluation_task(
             zeroshot_templates,
             device=device,
             precision=precision,
-            verbose=True,
+            verbose=False,
             save_clf=save_clf,
             load_clfs=load_clfs or [],
         )
