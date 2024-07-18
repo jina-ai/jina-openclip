@@ -481,7 +481,7 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
                 dataset_metrics = _filter_metrics(dataset_metrics, _select_metrics)
                 for k, v in dataset_metrics.items():
                     averages[k].append(v)
-                    metrics[f'{dataset_id}-{k}'] = v
+                    metrics[f'{dataset_id.replace("vidore/", "")}-{k}'] = v
 
             for k, v in averages.items():
                 metrics[f'avg-{k}'] = sum(v) / len(v)
@@ -497,6 +497,9 @@ def _draw_similarity_graph(model, transform, tokenizer, epoch, args, step):
         (epoch % args.simgraph_frequency) != 0 and epoch != args.epochs
     ):
         return None
+
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Drawing the similarity graphs ...')
 
     def _create_similarities(_images, _queries, _docs):
         img2txt_pos_sims = []
@@ -576,6 +579,9 @@ def _draw_similarity_graph(model, transform, tokenizer, epoch, args, step):
         wandb.log({'cossim-graph': wandb.Image(plt)}, step=step or 0)
 
     plt.close()
+
+    logger.info('Finished!')
+    logger.info('--------------------------------------------------------------------')
 
 
 def evaluate(
