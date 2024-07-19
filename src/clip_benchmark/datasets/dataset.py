@@ -1408,6 +1408,7 @@ def build_dataset(
             call('kaggle datasets download -d adityajn105/flickr8k', shell=True)
             call('unzip flickr8k.zip', shell=True)
             call('rm flickr8k.zip', shell=True)
+            call(f'mkdir {_flickr8k_root}', shell=True)
             call(f'mv Images/* {_flickr8k_root}', shell=True)
             call(f'rm -rf Images/', shell=True)
             call(f'mv captions.txt {_flickr8k_root}', shell=True)
