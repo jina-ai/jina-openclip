@@ -177,9 +177,14 @@ def run_benchmark(
         )
         print('-----------------------------------------------------------------------')
 
-        _dataset_root = os.path.join(dataset_root, dataset)
         if dataset.startswith('wds/'):
             _dataset_root = webdataset_root
+        elif dataset.startswith('vtab/'):
+            _dataset_root = dataset_root
+        elif 'imagenet' in dataset.lower() and dataset.lower() != 'imagenetv2':
+            _dataset_root = os.path.join(dataset_root, 'imagenet')
+        else:
+            _dataset_root = os.path.join(dataset_root, dataset)
 
         try:
             metrics = run_evaluation_task(
