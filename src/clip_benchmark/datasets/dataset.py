@@ -1327,7 +1327,7 @@ def build_dataset(
             'val',
             'test',
         ), f'Only `train` and `val` and `test` split available for {dataset_name}'
-        if not os.path.exists(root):
+        if not os.path.exists(os.path.join(root, 'Images')):
             # Automatic download
             print('Downloading flickr30k...')
             if not has_kaggle():
@@ -1395,7 +1395,7 @@ def build_dataset(
         # `kaggle datasets download -d adityajn105/flickr8k`
         # https://github.com/mehdidc/retrieval_annotations/releases/tag/1.0.0
         # (annotations)
-        if not os.path.exists(root):
+        if not os.path.exists(os.path.join(root, 'Images')):
             # Automatic download
             print('Downloading flickr8k...')
             if not has_kaggle():
