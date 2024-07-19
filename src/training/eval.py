@@ -190,6 +190,7 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
             task='auto',
             output=None,
             dataset_root=args.clip_benchmark_dataset_root,
+            webdataset_root=args.clip_benchmark_webdataset_root,
             distributed=False,
             recall_ks=[int(k) for k in args.clip_benchmark_recall_ks.split(',')],
         )
@@ -312,7 +313,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     metrics = {}
     tasks = args.mteb_tasks.split(',')
     langs = [
-        iso639.Language.match(lang).part3  for lang in args.mteb_languages.split(',')
+        iso639.Language.match(lang).part3 for lang in args.mteb_languages.split(',')
     ]
     select_metrics = set(args.mteb_metrics.split(','))
     autocast = get_autocast(args.precision)

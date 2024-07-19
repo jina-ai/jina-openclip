@@ -821,6 +821,15 @@ def parse_args(args):
         help='Specify CLIP Benchmark datasets root path.',
     )
     parser.add_argument(
+        '--clip-benchmark-webdataset-root',
+        type=str,
+        default=(
+            'https://huggingface.co/datasets/clip-benchmark/wds_{dataset_cleaned}/'
+            'tree/main'
+        ),
+        help='Specify CLIP Benchmark webdataset root path.',
+    )
+    parser.add_argument(
         '--clip-benchmark-batch-size',
         type=int,
         default=256,

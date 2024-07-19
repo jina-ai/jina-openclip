@@ -44,6 +44,9 @@ def run_benchmark(
     output: Optional[str] = None,
     languages: Union[str, List[str]] = 'en',
     dataset_root: str = 'root',
+    webdataset_root: str = (
+        'https://huggingface.co/datasets/clip-benchmark/wds_{dataset_cleaned}/tree/main'
+    ),
     feature_root: str = 'features',
     batch_size: int = 64,
     num_workers: int = 4,
@@ -162,6 +165,8 @@ def run_benchmark(
         random.shuffle(runs)
         runs = [r for i, r in enumerate(runs) if i % world_size == rank]
 
+    os.makedirs(dataset_root, exist_ok=True)
+
     results = []
     for i, (model, dataset, language) in enumerate(runs):
         print('-----------------------------------------------------------------------')
@@ -171,6 +176,10 @@ def run_benchmark(
             f'Language: {language}'
         )
         print('-----------------------------------------------------------------------')
+
+        _dataset_root = os.path.join(dataset_root, dataset)
+        if dataset.startswith('wds/'):
+            _dataset_root = webdataset_root
 
         try:
             metrics = run_evaluation_task(
