@@ -1395,7 +1395,8 @@ def build_dataset(
         # `kaggle datasets download -d adityajn105/flickr8k`
         # https://github.com/mehdidc/retrieval_annotations/releases/tag/1.0.0
         # (annotations)
-        if not os.path.exists(os.path.join(root, 'Images')):
+        _flickr8k_root = os.path.join(root, 'data')
+        if not os.path.exists(_flickr8k_root):
             # Automatic download
             print('Downloading flickr8k...')
             if not has_kaggle():
@@ -1406,8 +1407,10 @@ def build_dataset(
                 sys.exit(1)
             call('kaggle datasets download -d adityajn105/flickr8k', shell=True)
             call('unzip flickr8k.zip', shell=True)
-            call(f'mv Images {root}', shell=True)
-            call(f'mv captions.txt {root}', shell=True)
+            call('rm flickr8k.zip', shell=True)
+            call(f'mv Images/* {_flickr8k_root}', shell=True)
+            call(f'rm -rf Images/', shell=True)
+            call(f'mv captions.txt {_flickr8k_root}', shell=True)
         if not annotation_file:
             if language == 'en':
                 annotation_file = f'{root}/flickr8k_{split}_karpathy.txt'
@@ -1442,7 +1445,7 @@ def build_dataset(
                     f'Unsupported language {language} for `{dataset_name}`'
                 )
         ds = flickr.Flickr(
-            root=root, ann_file=annotation_file, transform=transform, **kwargs
+            root=_flickr8k_root, ann_file=annotation_file, transform=transform, **kwargs
         )
 
     elif dataset_name == 'food101':
