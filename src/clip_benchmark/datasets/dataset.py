@@ -1327,7 +1327,9 @@ def build_dataset(
             'val',
             'test',
         ), f'Only `train` and `val` and `test` split available for {dataset_name}'
-        if not os.path.exists(os.path.join(root, 'Images')):
+
+        _flickr30k_root = os.path.join(root, 'data')
+        if not os.path.exists(_flickr30k_root):
             # Automatic download
             print('Downloading flickr30k...')
             if not has_kaggle():
@@ -1340,10 +1342,11 @@ def build_dataset(
                 'kaggle datasets download -d hsankesara/flickr-image-dataset',
                 shell=True,
             )
+            call(f'mkdir {_flickr30k_root}', shell=True)
             call('unzip flickr-image-dataset.zip', shell=True)
             call(
                 (
-                    f'mv flickr30k_images/flickr30k_images {root} '
+                    f'mv flickr30k_images/flickr30k_images/* {_flickr30k_root} '
                     f'&& rm -rf flickr30k_images'
                 ),
                 shell=True,
@@ -1382,7 +1385,10 @@ def build_dataset(
                     f'Unsupported language {language} for `{dataset_name}`'
                 )
         ds = flickr.Flickr(
-            root=root, ann_file=annotation_file, transform=transform, **kwargs
+            root=_flickr30k_root,
+            ann_file=annotation_file,
+            transform=transform,
+            **kwargs,
         )
 
     elif dataset_name == 'flickr8k':
