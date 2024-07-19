@@ -188,7 +188,7 @@ def run_benchmark(
                 task=task,
                 output=output,
                 language=language,
-                dataset_root=dataset_root,
+                dataset_root=_dataset_root,
                 feature_root=feature_root,
                 batch_size=batch_size,
                 num_workers=num_workers,
