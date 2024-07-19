@@ -1287,31 +1287,49 @@ def build_dataset(
     elif dataset_name == 'xtd200':
         from clip_benchmark.datasets import xtd200
 
-        if language not in xtd200.SUPPORTED_LANGUAGES:
+        import iso639
+
+        _supported_languages = {
+            elm.split('_')[0]: elm
+            for elm in xtd200.SUPPORTED_LANGUAGES
+        }
+        lang = iso639.Language.match(language).part3
+
+        if lang not in _supported_languages:
             raise LanguageNotSupportedError(
                 f'Unsupported language for xtd200: {language}'
             )
         annotation_file = os.path.join(
-            root, xtd200.OUTPUT_FILENAME_TEMPLATE.format(language)
+            root, xtd200.OUTPUT_FILENAME_TEMPLATE.format(_supported_languages[lang])
         )
         if not os.path.exists(annotation_file):
-            xtd200.create_annotation_file(root, language)
+            xtd200.create_annotation_file(root, _supported_languages[lang])
+
         ds = xtd200.XTD200(
             root=root, ann_file=annotation_file, transform=transform, **kwargs
         )
 
     elif dataset_name == 'flickr30k-200':
+
+        import iso639
         from clip_benchmark.datasets import flickr30k_200
 
-        if language not in flickr30k_200.SUPPORTED_LANGUAGES:
+        _supported_languages = {
+            elm.split('_')[0]: elm
+            for elm in flickr30k_200.SUPPORTED_LANGUAGES
+        }
+        lang = iso639.Language.match(language).part3
+
+        if lang not in _supported_languages:
             raise LanguageNotSupportedError(
                 f'Unsupported language for flickr30k-200: {language}'
             )
         annotation_file = os.path.join(
-            root, flickr30k_200.OUTPUT_FILENAME_TEMPLATE.format(language)
+            root,
+            flickr30k_200.OUTPUT_FILENAME_TEMPLATE.format(_supported_languages[lang])
         )
         if not os.path.exists(annotation_file):
-            flickr30k_200.create_annotation_file(root, language)
+            flickr30k_200.create_annotation_file(root, _supported_languages[lang])
 
         ds = flickr30k_200.Flickr30k_200(
             root=root, ann_file=annotation_file, transform=transform, **kwargs
