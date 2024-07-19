@@ -181,7 +181,7 @@ def run_benchmark(
             _dataset_root = webdataset_root
         elif dataset.startswith('vtab/'):
             _dataset_root = dataset_root
-        elif 'imagenet' in dataset.lower() and dataset.lower() != 'imagenetv2':
+        elif dataset in {'imagenet1k', 'babel_imagenet', 'imagenet-w'}:
             _dataset_root = os.path.join(dataset_root, 'imagenet')
         else:
             _dataset_root = os.path.join(dataset_root, dataset)

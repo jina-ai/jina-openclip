@@ -8,16 +8,14 @@ import shutil
 import tarfile
 from subprocess import call
 
-import requests
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.datasets import ImageFolder
-from tqdm import tqdm
 
 URLS = {
-    'matched-frequency': 'https://imagenetv2public.s3-us-west-2.amazonaws.com/imagenetv2-matched-frequency.tar.gz',
-    'threshold-0.7': 'https://imagenetv2public.s3-us-west-2.amazonaws.com/imagenetv2-threshold0.7.tar.gz',
-    'top-images': 'https://imagenetv2public.s3-us-west-2.amazonaws.com/imagenetv2-top-images.tar.gz',
+    'matched-frequency': 'https://huggingface.co/datasets/vaishaal/ImageNetV2/resolve/main/imagenetv2-matched-frequency.tar.gz',
+    'threshold-0.7': 'https://huggingface.co/datasets/vaishaal/ImageNetV2/blob/main/imagenetv2-threshold0.7.tar.gz',
+    'top-images': 'https://huggingface.co/datasets/vaishaal/ImageNetV2/blob/main/imagenetv2-top-images.tar.gz',
     'val': 'https://imagenetv2public.s3-us-west-2.amazonaws.com/imagenet_validation.tar.gz',
 }
 
