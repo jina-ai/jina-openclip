@@ -4,7 +4,6 @@ https://github.com/mlfoundations/open_clip/blob/main/src/training/zero_shot.py
 Thanks to the authors of OpenCLIP
 """
 
-from contextlib import suppress
 from typing import Any, Optional, Union
 
 import torch
@@ -15,7 +14,9 @@ from tqdm import tqdm
 from training.utils import get_autocast
 
 
-def _zero_shot_classifier(model, tokenizer, classnames, templates, device, precision='amp'):
+def _zero_shot_classifier(
+    model, tokenizer, classnames, templates, device, precision='amp'
+):
     """
     This function returns zero-shot vectors for each class in order
     to use it for zero-shot classification.
@@ -222,7 +223,9 @@ def evaluate(
         torch.save(classifier, save_clf)
         # exit() - not sure if we want to exit here or not.
 
-    logits, target = _run_classification(model, classifier, dataloader, device, precision=precision)
+    logits, target = _run_classification(
+        model, classifier, dataloader, device, precision=precision
+    )
     is_multilabel = len(target.shape) == 2
 
     if is_multilabel:

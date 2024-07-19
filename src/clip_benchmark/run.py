@@ -5,7 +5,7 @@ from typing import Any, List, Optional, Union
 
 from training.distributed import world_info_from_env
 
-from clip_benchmark.dataset import (
+from clip_benchmark.datasets.dataset import (
     LanguageNotSupportedError,
     dataset_collection,
     get_dataset_collection_from_file,
@@ -44,6 +44,9 @@ def run_benchmark(
     output: Optional[str] = None,
     languages: Union[str, List[str]] = 'en',
     dataset_root: str = 'root',
+    webdataset_root: str = (
+        'https://huggingface.co/datasets/clip-benchmark/wds_{dataset_cleaned}/tree/main'
+    ),
     feature_root: str = 'features',
     batch_size: int = 64,
     num_workers: int = 4,
@@ -162,6 +165,8 @@ def run_benchmark(
         random.shuffle(runs)
         runs = [r for i, r in enumerate(runs) if i % world_size == rank]
 
+    os.makedirs(dataset_root, exist_ok=True)
+
     results = []
     for i, (model, dataset, language) in enumerate(runs):
         print('-----------------------------------------------------------------------')
@@ -172,6 +177,17 @@ def run_benchmark(
         )
         print('-----------------------------------------------------------------------')
 
+        if dataset.startswith('wds/'):
+            _dataset_root = webdataset_root
+        elif dataset.startswith('vtab/'):
+            _dataset_root = dataset_root
+        elif dataset in {'imagenet1k', 'babel_imagenet', 'imagenet-w'}:
+            _dataset_root = os.path.join(dataset_root, 'imagenet')
+            os.makedirs(_dataset_root, exist_ok=True)
+        else:
+            _dataset_root = os.path.join(dataset_root, dataset)
+            os.makedirs(_dataset_root, exist_ok=True)
+
         try:
             metrics = run_evaluation_task(
                 model=model,
@@ -179,7 +195,7 @@ def run_benchmark(
                 task=task,
                 output=output,
                 language=language,
-                dataset_root=dataset_root,
+                dataset_root=_dataset_root,
                 feature_root=feature_root,
                 batch_size=batch_size,
                 num_workers=num_workers,

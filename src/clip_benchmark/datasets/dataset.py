@@ -244,9 +244,9 @@ def build_dataset(
     """
 
     use_classnames_and_templates = task in ('zeroshot_classification', 'linear_probe')
+    current_folder = os.path.dirname(__file__)
 
     if use_classnames_and_templates:  # Only load templates and classnames if we have to
-        current_folder = os.path.dirname(__file__)
 
         # Load <LANG>_classnames.json (packaged with CLIP benchmark that are used by
         # default)
@@ -318,6 +318,8 @@ def build_dataset(
 
     if language != 'en':
         if dataset_name not in {
+            'imagenet1k',
+            'imagenetv2',
             'babel_imagenet',
             'multilingual_mscoco_captions',
             'flickr30k',
@@ -359,6 +361,10 @@ def build_dataset(
         ds = ImageNet(
             root=root, split='train' if train else 'val', transform=transform, **kwargs
         )
+        if default_classnames is None:
+            raise LanguageNotSupportedError(
+                f"Language '{language}' not supported for ImageNet1K"
+            )
         ds.classes = default_classnames['imagenet1k']
 
     elif dataset_name == 'imagenet-w':
@@ -435,6 +441,10 @@ def build_dataset(
         ds = imagenetv2.ImageNetV2Dataset(
             variant='matched-frequency', transform=transform, location=root
         )
+        if default_classnames is None:
+            raise LanguageNotSupportedError(
+                f"Language '{language}' not supported for Babel-ImageNet"
+            )
         ds.classes = default_classnames['imagenet1k']
 
     elif dataset_name == 'imagenet_sketch':
@@ -1277,31 +1287,49 @@ def build_dataset(
     elif dataset_name == 'xtd200':
         from clip_benchmark.datasets import xtd200
 
-        if language not in xtd200.SUPPORTED_LANGUAGES:
+        import iso639
+
+        _supported_languages = {
+            elm.split('_')[0]: elm
+            for elm in xtd200.SUPPORTED_LANGUAGES
+        }
+        lang = iso639.Language.match(language).part3
+
+        if lang not in _supported_languages:
             raise LanguageNotSupportedError(
                 f'Unsupported language for xtd200: {language}'
             )
         annotation_file = os.path.join(
-            root, xtd200.OUTPUT_FILENAME_TEMPLATE.format(language)
+            root, xtd200.OUTPUT_FILENAME_TEMPLATE.format(_supported_languages[lang])
         )
         if not os.path.exists(annotation_file):
-            xtd200.create_annotation_file(root, language)
+            xtd200.create_annotation_file(root, _supported_languages[lang])
+
         ds = xtd200.XTD200(
             root=root, ann_file=annotation_file, transform=transform, **kwargs
         )
 
     elif dataset_name == 'flickr30k-200':
+
+        import iso639
         from clip_benchmark.datasets import flickr30k_200
 
-        if language not in flickr30k_200.SUPPORTED_LANGUAGES:
+        _supported_languages = {
+            elm.split('_')[0]: elm
+            for elm in flickr30k_200.SUPPORTED_LANGUAGES
+        }
+        lang = iso639.Language.match(language).part3
+
+        if lang not in _supported_languages:
             raise LanguageNotSupportedError(
                 f'Unsupported language for flickr30k-200: {language}'
             )
         annotation_file = os.path.join(
-            root, flickr30k_200.OUTPUT_FILENAME_TEMPLATE.format(language)
+            root,
+            flickr30k_200.OUTPUT_FILENAME_TEMPLATE.format(_supported_languages[lang])
         )
         if not os.path.exists(annotation_file):
-            flickr30k_200.create_annotation_file(root, language)
+            flickr30k_200.create_annotation_file(root, _supported_languages[lang])
 
         ds = flickr30k_200.Flickr30k_200(
             root=root, ann_file=annotation_file, transform=transform, **kwargs
@@ -1317,7 +1345,9 @@ def build_dataset(
             'val',
             'test',
         ), f'Only `train` and `val` and `test` split available for {dataset_name}'
-        if not os.path.exists(root):
+
+        _flickr30k_root = os.path.join(root, 'data')
+        if not os.path.exists(_flickr30k_root):
             # Automatic download
             print('Downloading flickr30k...')
             if not has_kaggle():
@@ -1330,10 +1360,11 @@ def build_dataset(
                 'kaggle datasets download -d hsankesara/flickr-image-dataset',
                 shell=True,
             )
+            call(f'mkdir {_flickr30k_root}', shell=True)
             call('unzip flickr-image-dataset.zip', shell=True)
             call(
                 (
-                    f'mv flickr30k_images/flickr30k_images {root} '
+                    f'mv flickr30k_images/flickr30k_images/* {_flickr30k_root} '
                     f'&& rm -rf flickr30k_images'
                 ),
                 shell=True,
@@ -1372,7 +1403,10 @@ def build_dataset(
                     f'Unsupported language {language} for `{dataset_name}`'
                 )
         ds = flickr.Flickr(
-            root=root, ann_file=annotation_file, transform=transform, **kwargs
+            root=_flickr30k_root,
+            ann_file=annotation_file,
+            transform=transform,
+            **kwargs,
         )
 
     elif dataset_name == 'flickr8k':
@@ -1385,7 +1419,8 @@ def build_dataset(
         # `kaggle datasets download -d adityajn105/flickr8k`
         # https://github.com/mehdidc/retrieval_annotations/releases/tag/1.0.0
         # (annotations)
-        if not os.path.exists(root):
+        _flickr8k_root = os.path.join(root, 'data')
+        if not os.path.exists(_flickr8k_root):
             # Automatic download
             print('Downloading flickr8k...')
             if not has_kaggle():
@@ -1396,8 +1431,11 @@ def build_dataset(
                 sys.exit(1)
             call('kaggle datasets download -d adityajn105/flickr8k', shell=True)
             call('unzip flickr8k.zip', shell=True)
-            call(f'mv Images {root}', shell=True)
-            call(f'mv captions.txt {root}', shell=True)
+            call('rm flickr8k.zip', shell=True)
+            call(f'mkdir {_flickr8k_root}', shell=True)
+            call(f'mv Images/* {_flickr8k_root}', shell=True)
+            call(f'rm -rf Images/', shell=True)
+            call(f'mv captions.txt {_flickr8k_root}', shell=True)
         if not annotation_file:
             if language == 'en':
                 annotation_file = f'{root}/flickr8k_{split}_karpathy.txt'
@@ -1432,7 +1470,7 @@ def build_dataset(
                     f'Unsupported language {language} for `{dataset_name}`'
                 )
         ds = flickr.Flickr(
-            root=root, ann_file=annotation_file, transform=transform, **kwargs
+            root=_flickr8k_root, ann_file=annotation_file, transform=transform, **kwargs
         )
 
     elif dataset_name == 'food101':

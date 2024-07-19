@@ -14,7 +14,6 @@ from training.data import (
     MultiDataset,
     dynamic_collate,
     get_csv_dataset,
-    get_imagenet,
     get_synthetic_dataset,
     get_wds_dataset,
 )
@@ -231,15 +230,6 @@ def _create_multimodal_dataloader(
         )
     else:
         raise ValueError(f'Unsupported val dataset type: {_val_dataset_type}')
-
-    if args.imagenet_val is not None:
-        data['imagenet-val'] = get_imagenet(
-            args, (preprocess_train, preprocess_val), 'val'
-        )
-    if args.imagenet_v2 is not None:
-        data['imagenet-v2'] = get_imagenet(
-            args, (preprocess_train, preprocess_val), 'v2'
-        )
 
     return data
 

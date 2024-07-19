@@ -393,7 +393,7 @@ def main(args):
                 if not args.distributed and next(iter(sd.items()))[0].startswith(
                     'module'
                 ):
-                    sd = {k[len('module.') :]: v for k, v in sd.items()}
+                    sd = {k[len('module.'):]: v for k, v in sd.items()}
                 model.load_state_dict(sd)
                 if optimizer is not None:
                     checkpoint['optimizer']['param_groups'] = optimizer.state_dict()[

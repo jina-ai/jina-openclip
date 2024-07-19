@@ -6,17 +6,16 @@ Thanks to the authors of wise-ft
 import pathlib
 import shutil
 import tarfile
+from subprocess import call
 
-import requests
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.datasets import ImageFolder
-from tqdm import tqdm
 
 URLS = {
-    'matched-frequency': 'https://imagenetv2public.s3-us-west-2.amazonaws.com/imagenetv2-matched-frequency.tar.gz',
-    'threshold-0.7': 'https://imagenetv2public.s3-us-west-2.amazonaws.com/imagenetv2-threshold0.7.tar.gz',
-    'top-images': 'https://imagenetv2public.s3-us-west-2.amazonaws.com/imagenetv2-top-images.tar.gz',
+    'matched-frequency': 'https://huggingface.co/datasets/vaishaal/ImageNetV2/resolve/main/imagenetv2-matched-frequency.tar.gz',
+    'threshold-0.7': 'https://huggingface.co/datasets/vaishaal/ImageNetV2/blob/main/imagenetv2-threshold0.7.tar.gz',
+    'top-images': 'https://huggingface.co/datasets/vaishaal/ImageNetV2/blob/main/imagenetv2-top-images.tar.gz',
     'val': 'https://imagenetv2public.s3-us-west-2.amazonaws.com/imagenet_validation.tar.gz',
 }
 
@@ -41,19 +40,10 @@ class ImageNetValDataset(Dataset):
         if not self.dataset_root.exists() or len(self.fnames) != VAL_DATASET_SIZE:
             if not self.tar_root.exists():
                 print('Dataset imagenet-val not found on disk, downloading....')
-                response = requests.get(URLS['val'], stream=True)
-                total_size_in_bytes = int(response.headers.get('content-length', 0))
-                block_size = 1024  # 1 Kibibyte
-                progress_bar = tqdm(
-                    total=total_size_in_bytes, unit='iB', unit_scale=True
+                call(
+                    f'wget {URLS["val"]} --output-document={self.tar_root}',
+                    shell=True,
                 )
-                with open(self.tar_root, 'wb') as f:
-                    for data in response.iter_content(block_size):
-                        progress_bar.update(len(data))
-                        f.write(data)
-                progress_bar.close()
-                if total_size_in_bytes != 0 and progress_bar.n != total_size_in_bytes:
-                    assert False, f'Downloading from {URLS["variant"]} failed'
             print('Extracting....')
             tarfile.open(self.tar_root).extractall(f'{location}')
             shutil.move(f"{location}/{FNAMES['val']}", self.dataset_root)
@@ -80,19 +70,10 @@ class ImageNetV2Dataset(Dataset):
         if not self.dataset_root.exists() or len(self.fnames) != V2_DATASET_SIZE:
             if not self.tar_root.exists():
                 print(f'Dataset {variant} not found on disk, downloading....')
-                response = requests.get(URLS[variant], stream=True)
-                total_size_in_bytes = int(response.headers.get('content-length', 0))
-                block_size = 1024  # 1 Kibibyte
-                progress_bar = tqdm(
-                    total=total_size_in_bytes, unit='iB', unit_scale=True
+                call(
+                    f'wget {URLS[variant]} --output-document={self.tar_root}',
+                    shell=True,
                 )
-                with open(self.tar_root, 'wb') as f:
-                    for data in response.iter_content(block_size):
-                        progress_bar.update(len(data))
-                        f.write(data)
-                progress_bar.close()
-                if total_size_in_bytes != 0 and progress_bar.n != total_size_in_bytes:
-                    assert False, f'Downloading from {URLS[variant]} failed'
             print('Extracting....')
             tarfile.open(self.tar_root).extractall(f'{location}')
             shutil.move(f'{location}/{FNAMES[variant]}', self.dataset_root)

@@ -4,5 +4,7 @@ pycocoevalcap
 imagenet-w
 gdown
 kaggle
+mteb==1.12.65
+python-iso639==2024.4.27
+vidore_benchmark==2.1.0
 task-adaptation
-mteb

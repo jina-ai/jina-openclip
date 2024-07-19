@@ -775,12 +775,6 @@ def parse_args(args):
         help='How often (in epochs) to run evaluation with val data.',
     )
     parser.add_argument(
-        '--zeroshot-frequency',
-        type=int,
-        default=1,
-        help='How often (in epochs) to run zero shot evaluation.',
-    )
-    parser.add_argument(
         '--clip-benchmark-frequency',
         type=int,
         default=1,
@@ -805,40 +799,13 @@ def parse_args(args):
         help='How often (in epochs) to draw the cosine similarity distribution graph.',
     )
     parser.add_argument(
-        '--imagenet-val',
-        type=str,
-        default=None,
-        help='Path to ImageNet val set for conducting zero shot evaluation.',
-    )
-    parser.add_argument(
-        '--imagenet-v2',
-        type=str,
-        default=None,
-        help='Path to ImageNet v2 for conducting zero shot evaluation.',
-    )
-    parser.add_argument(
         '--clip-benchmark-datasets',
         type=str,
         default=(
-            'wds/mscoco_captions,'
-            'wds/multilingual_mscoco_captions,'
-            'wds/flickr8k,'
-            'wds/flickr30k,'
-            'wds/flickr30k-200,'
-            'wds/crossmodal3600,'
-            'wds/xtd200,'
-            'wds/imagenet1k'
+            'imagenet1k,mscoco_captions,multilingual_mscoco_captions,'
+            'wds/flickr8k,wds/flickr30k,crossmodal3600,xtd200'
         ),
-        help='Specify datasets to use in CLIP benchmark.',
-    )
-    parser.add_argument(
-        '--clip-benchmark-dataset-root',
-        type=str,
-        default=(
-            'https://huggingface.co/datasets/clip-benchmark/wds_{dataset_cleaned}'
-            '/tree/main'
-        ),
-        help='Specify CLIP Benchmark datasets root path.',
+        help='Specify a comma separated list of datasets to use in CLIP benchmark.',
     )
     parser.add_argument(
         '--clip-benchmark-languages',
@@ -847,9 +814,30 @@ def parse_args(args):
         help='Specify CLIP Benchmark languages.',
     )
     parser.add_argument(
+        '--clip-benchmark-dataset-root',
+        type=str,
+        default='./clip_benchmark_datasets/',
+        help='Specify CLIP Benchmark datasets root path.',
+    )
+    parser.add_argument(
+        '--clip-benchmark-webdataset-root',
+        type=str,
+        default=(
+            'https://huggingface.co/datasets/clip-benchmark/wds_{dataset_cleaned}/'
+            'tree/main'
+        ),
+        help='Specify CLIP Benchmark webdataset root path.',
+    )
+    parser.add_argument(
+        '--clip-benchmark-batch-size',
+        type=int,
+        default=256,
+        help='The batch size that will be used during the CLIP benchmark evaluation.',
+    )
+    parser.add_argument(
         '--clip-benchmark-recall-ks',
         type=str,
-        default='1,5',
+        default='5',
         help=(
             'Define a comma separated list of k values, at which metrics will be '
             'calculated in the CLIP Benchmark.'
@@ -858,7 +846,10 @@ def parse_args(args):
     parser.add_argument(
         '--mteb-tasks',
         type=str,
-        default='STS12,STS15,STS17',
+        default=(
+            'ArguAna,NFCorpus,NarrativeQARetrieval,FiQA2018,'
+            'STS12,STS13,STS14,STS15,STS16,STS17,STS22'
+        ),
         help='Define a comma separated list of MTEB tasks to evaluate on.',
     )
     parser.add_argument(
@@ -866,6 +857,21 @@ def parse_args(args):
         type=str,
         default='en',
         help='Specify MTEB languages.',
+    )
+    parser.add_argument(
+        '--mteb-metrics',
+        type=str,
+        default='ndcg_at_10,cosine_spearman',
+        help=(
+            'Define a comma separated list of metric names, that will be kept from the '
+            'MTEB evaluation.'
+        ),
+    )
+    parser.add_argument(
+        '--mteb-batch-size',
+        type=int,
+        default=16,
+        help='The batch size that will be used during MTEB evaluation.',
     )
     parser.add_argument(
         '--mteb-max-sequence-length',
@@ -895,16 +901,19 @@ def parse_args(args):
         ),
     )
     parser.add_argument(
-        '--vidore-queries-batch-size',
-        type=str,
-        default=None,
-        help='Define the batch size for the queries encoding on the Vidore benchmark.',
+        '--vidore-batch-size',
+        type=int,
+        default=16,
+        help='Define the batch size that will be used on the Vidore benchmark.',
     )
     parser.add_argument(
-        '--vidore-documents-batch-size',
+        '--vidore-metrics',
         type=str,
-        default=None,
-        help='Define the batch size for the documents encoding on the Vidore benchmark.'
+        default='ndcg_at_5',
+        help=(
+            'Define a comma separated list of metric names, that will be kept from the '
+            'Vidore evaluation.'
+        ),
     )
 
     args = parser.parse_args(args)
