@@ -802,9 +802,8 @@ def parse_args(args):
         '--clip-benchmark-datasets',
         type=str,
         default=(
-            'imagenet1k,mscoco_captions,'
-            'multilingual_mscoco_captions,flickr8k,flickr30k,flickr30k-200,'
-            'crossmodal3600,xtd200'
+            'imagenet1k,mscoco_captions,multilingual_mscoco_captions,'
+            'wds/flickr8k,wds/flickr30k,crossmodal3600,xtd200'
         ),
         help='Specify a comma separated list of datasets to use in CLIP benchmark.',
     )
