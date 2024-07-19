@@ -183,8 +183,10 @@ def run_benchmark(
             _dataset_root = dataset_root
         elif dataset in {'imagenet1k', 'babel_imagenet', 'imagenet-w'}:
             _dataset_root = os.path.join(dataset_root, 'imagenet')
+            os.makedirs(_dataset_root, exist_ok=True)
         else:
             _dataset_root = os.path.join(dataset_root, dataset)
+            os.makedirs(_dataset_root, exist_ok=True)
 
         try:
             metrics = run_evaluation_task(
