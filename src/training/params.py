@@ -880,6 +880,12 @@ def parse_args(args):
         help='The max sequence length that will be used during MTEB evaluation.',
     )
     parser.add_argument(
+        '--mteb-tokenizer-name',
+        type=str,
+        default='',
+        help='The tokenizer to use when running the MTEB benchmark.',
+    )
+    parser.add_argument(
         '--vidore-dataset-name',
         type=str,
         default=None,
