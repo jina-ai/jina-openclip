@@ -20,6 +20,7 @@ except ImportError:
     wandb = None
 
 from open_clip import get_input_dtype
+
 from training.distributed import is_master
 from training.utils import get_autocast
 
@@ -237,7 +238,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             self._batch_size = batch_size
             self._max_seq_length = max_seq_length
             self._device = device
-            print(clip_model)
+
             if isinstance(clip_model, DeepSpeedEngine):
                 _model = clip_model.module
             elif isinstance(clip_model, torch.nn.parallel.DistributedDataParallel):
@@ -247,8 +248,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
 
             self._model = _model
 
-            print(_model)
-            if isinstance(_model, CLIP) or isinstance(_model, CustomTextCLIP):
+            if isinstance(_model, CLIP):
                 assert _tokenizer is not None
                 self._tokenizer = _tokenizer
                 self._embed = self._clip_embed
@@ -306,6 +306,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     _mteb_model = _MTEBEncoder(
         clip_model=model,
         _tokenizer=tokenizer,
+        hf_tokenizer_name=args.mteb_tokenizer_name,
         max_seq_length=args.mteb_max_sequence_length,
         device=args.device,
     )
@@ -363,8 +364,8 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
         raise ValueError('Please provide only one of dataset name or collection name')
 
     import huggingface_hub
-    from vidore_benchmark.retrievers import VisionRetriever
     from vidore_benchmark.evaluation.evaluate import evaluate_dataset
+    from vidore_benchmark.retrievers import VisionRetriever
     from vidore_benchmark.utils.iter_utils import batched
     from vidore_benchmark.utils.torch_utils import get_torch_device
 
