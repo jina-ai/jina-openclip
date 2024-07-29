@@ -29,7 +29,7 @@ from training.loss import (
 DEFAULT_CONTEXT_LENGTH = 77
 
 
-def _create_contrastive_loss(args):
+def _create_contrastive_loss(args, embed_dim: int):
     logger.info('Creating the contrastive loss ...')
     if args.distill:
         logger.debug(f'Loss class: {DistillInfoNCELoss.__name__}')
@@ -87,12 +87,14 @@ def _create_contrastive_loss(args):
             else None
         )
         logger.info(f'Using Matryoshka with dims: {dims} and weights: {weights}')
-        return MatryoshkaOperator(loss=loss, dims=dims, weights=weights)
+        return MatryoshkaOperator(
+            loss=loss, embed_dim=embed_dim, dims=dims, weights=weights
+        )
 
     return loss
 
 
-def _create_mtl_losses(args):
+def _create_mtl_losses(args, embed_dim: int):
     import training.loss as loss_module
 
     try:
@@ -125,7 +127,9 @@ def _create_mtl_losses(args):
             logger.debug(f'Setting up loss: {d["name"].__name__}')
             lossfn = d['name'](**d['options'])
             if args.matryoshka:
-                lossfn = MatryoshkaOperator(loss=lossfn, dims=dims, weights=weights)
+                lossfn = MatryoshkaOperator(
+                    loss=lossfn, embed_dim=embed_dim, dims=dims, weights=weights
+                )
             losses[task] = lossfn
 
     return losses
@@ -363,11 +367,11 @@ def _create_s3_dataloader(
     return dataset, dataloader
 
 
-def create_losses(args):
-    loss = _create_contrastive_loss(args)
+def create_losses(args, embed_dim: int):
+    loss = _create_contrastive_loss(args, embed_dim)
     mtllosses = None
     if args.train_mtldata:
-        mtllosses = _create_mtl_losses(args)
+        mtllosses = _create_mtl_losses(args, embed_dim)
     return loss, mtllosses
 
 

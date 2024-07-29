@@ -2,6 +2,8 @@ from collections import defaultdict
 from typing import Optional, Sequence
 
 import torch
+import torch.nn.functional as f
+from loguru import logger
 from torch import nn
 
 
@@ -9,6 +11,7 @@ class MatryoshkaOperator(nn.Module):
     def __init__(
         self,
         loss: nn.Module,
+        embed_dim: int,
         dims: Sequence[int] = (16, 32, 64, 128, 256, 512),
         weights: Optional[Sequence[int]] = None,
     ):
@@ -18,13 +21,24 @@ class MatryoshkaOperator(nn.Module):
             assert len(weights) == len(dims)
         self._dims = dims
         self._weights = weights if weights else [1] * len(self._dims)
+        self._embed_dim = embed_dim
 
-    @staticmethod
-    def _is_feature_tensor(obj):
+        assert all(dim <= embed_dim for dim in dims), (
+            'Some Matryoshka subspaces have a higher dimensionality than '
+            'the full embedding space!'
+        )
+        if embed_dim not in self._dims:
+            logger.warning(
+                'The full embedding dimensionality is not included in the '
+                'Matryoshka subspaces!'
+            )
+
+    def _is_feature_tensor(self, obj):
         return (
             torch.is_tensor(obj)
             and torch.is_floating_point(obj)
             and len(obj.shape) == 2
+            and obj.shape[1] == self._embed_dim
         )
 
     def forward(self, *args, **kwargs):
@@ -39,11 +53,17 @@ class MatryoshkaOperator(nn.Module):
 
         for dim, weight in zip(self._dims, self._weights):
             _args = [
-                arg if i not in _tensor_args_idxs else arg[..., :dim].contiguous()
+                (
+                    arg if i not in _tensor_args_idxs
+                    else f.normalize(arg[..., :dim].contiguous(), p=2, dim=-1)
+                )
                 for i, arg in enumerate(args)
             ]
             _kwargs = {
-                k: v if k not in _tensor_kwargs_idxs else v[..., :dim].contiguous()
+                k: (
+                    v if k not in _tensor_kwargs_idxs
+                    else f.normalize(v[..., :dim].contiguous(), p=2, dim=-1)
+                )
                 for k, v in kwargs.items()
             }
             _composite_loss = self._loss(*_args, **_kwargs, output_dict=output_dict)
