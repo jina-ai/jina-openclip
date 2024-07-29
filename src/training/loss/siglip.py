@@ -217,7 +217,7 @@ class SigLIPLoss(nn.Module):
             if self._bidirectional:
 
                 b_features_to_right = b_features_to_left = b_features
-                num_bidir, remainder = divmod(self.world_size - 1, 2)
+                num_bidir, remainder = divmod(self._world_size - 1, 2)
                 for i in range(num_bidir):
                     b_features_received = neighbour_exchange_bidirectional_with_grad(
                         left_rank=left_rank,
@@ -250,7 +250,7 @@ class SigLIPLoss(nn.Module):
                     )
             else:
                 b_features_to_right = b_features
-                for i in range(self.world_size - 1):
+                for i in range(self._world_size - 1):
                     b_features_from_left = neighbour_exchange_with_grad(
                         from_rank=left_rank,
                         to_rank=right_rank,
