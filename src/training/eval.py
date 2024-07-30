@@ -219,7 +219,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
 
     import iso639
     from mteb import MTEB, get_tasks
-    from open_clip.model import CLIP, CustomTextCLIP
+    from open_clip.model import CLIP
     from transformers import AutoTokenizer
 
     class _MTEBEncoder(torch.nn.Module):

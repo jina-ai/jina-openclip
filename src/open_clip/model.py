@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as f
 from loguru import logger
 from torch import nn
 
@@ -44,8 +44,12 @@ class CLIPVisionCfg:
     image_size: Union[Tuple[int, int], int] = 224
 
     ls_init_value: Optional[float] = None  # layer scale initial value
-    patch_dropout: float = 0.0  # what fraction of patches to dropout during training (0 would mean disabled and no patches dropped) - 0.5 to 0.75 recommended in the paper for optimal results
-    attentional_pool: bool = False  # whether to use attentional pooler in the last embedding layer (overrides pool_type)
+    # what fraction of patches to dropout during training (0 would mean disabled and 
+    # no patches dropped) - 0.5 to 0.75 recommended in the paper for optimal results
+    patch_dropout: float = 0.0
+    # whether to use attentional pooler in the last embedding layer 
+    # (overrides pool_type)
+    attentional_pool: bool = False
     attn_pooler_queries: int = 256  # n_queries for attentional pooler
     attn_pooler_heads: int = 8  # n heads for attentional_pooling
     no_ln_pre: bool = False  # disable pre transformer LayerNorm
@@ -75,9 +79,9 @@ class CLIPVisionCfg:
     timm_proj_bias: bool = False
     # head dropout
     timm_drop: float = 0.0
-    #attention dropout
+    # attention dropout
     timm_attn_drop: float = 0.0
-    #mpl hidden layer dropout, is called proj_drop for timm
+    # mpl hidden layer dropout, is called proj_drop for timm
     timm_proj_drop: float = 0.0
     # backbone stochastic depth
     timm_drop_path: Optional[float] = None
@@ -552,6 +556,7 @@ class CLIP(nn.Module):
         cache_dir: Optional[str] = None,
     ):
         super().__init__()
+        self.embed_dim = embed_dim
         self.output_dict = output_dict
 
         self.visual = _build_vision_tower(
@@ -591,7 +596,7 @@ class CLIP(nn.Module):
 
     def encode_image(self, image, normalize: bool = False):
         features = self.visual(image)
-        return F.normalize(features, dim=-1) if normalize else features
+        return f.normalize(features, dim=-1) if normalize else features
 
     def encode_text(self, text, normalize: bool = False):
         cast_dtype = self.transformer.get_cast_dtype()
@@ -610,7 +615,7 @@ class CLIP(nn.Module):
             else:
                 x = x @ self.text_projection
 
-        return F.normalize(x, dim=-1) if normalize else x
+        return f.normalize(x, dim=-1) if normalize else x
 
     def get_logits(self, image, text):
         image_features = self.encode_image(image, normalize=True)
@@ -670,6 +675,7 @@ class CustomTextCLIP(nn.Module):
         cache_dir: Optional[str] = None,
     ):
         super().__init__()
+        self.embed_dim = embed_dim
         self.output_dict = output_dict
         self.visual = _build_vision_tower(
             embed_dim, vision_cfg, quick_gelu, cast_dtype, cache_dir
@@ -705,11 +711,11 @@ class CustomTextCLIP(nn.Module):
 
     def encode_image(self, image, normalize: bool = False):
         features = self.visual(image)
-        return F.normalize(features, dim=-1) if normalize else features
+        return f.normalize(features, dim=-1) if normalize else features
 
     def encode_text(self, text, normalize: bool = False):
         features = self.text(text)
-        return F.normalize(features, dim=-1) if normalize else features
+        return f.normalize(features, dim=-1) if normalize else features
 
     def get_logits(self, image, text):
         image_features = self.encode_image(image, normalize=True)
@@ -755,32 +761,32 @@ class CustomTextCLIP(nn.Module):
 def convert_weights_to_lp(model: nn.Module, dtype=torch.float16):
     """Convert applicable model parameters to low-precision (bf16 or fp16)"""
 
-    def _convert_weights(l):
-        if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Linear)):
-            l.weight.data = l.weight.data.to(dtype)
-            if l.bias is not None:
-                l.bias.data = l.bias.data.to(dtype)
+    def _convert_weights(layer):
+        if isinstance(layer, (nn.Conv1d, nn.Conv2d, nn.Linear)):
+            layer.weight.data = layer.weight.data.to(dtype)
+            if layer.bias is not None:
+                layer.bias.data = layer.bias.data.to(dtype)
 
-        if isinstance(l, (nn.MultiheadAttention, Attention)):
+        if isinstance(layer, (nn.MultiheadAttention, Attention)):
             for attr in [
                 *[f'{s}_proj_weight' for s in ['in', 'q', 'k', 'v']],
                 'in_proj_bias',
                 'bias_k',
                 'bias_v',
             ]:
-                tensor = getattr(l, attr)
+                tensor = getattr(layer, attr)
                 if tensor is not None:
                     tensor.data = tensor.data.to(dtype)
 
-        if isinstance(l, (CLIP, TextTransformer)):
+        if isinstance(layer, (CLIP, TextTransformer)):
             # convert text nn.Parameter projections
-            attr = getattr(l, 'text_projection', None)
+            attr = getattr(layer, 'text_projection', None)
             if attr is not None:
                 attr.data = attr.data.to(dtype)
 
-        if isinstance(l, VisionTransformer):
+        if isinstance(layer, VisionTransformer):
             # convert vision nn.Parameter projections
-            attr = getattr(l, 'proj', None)
+            attr = getattr(layer, 'proj', None)
             if attr is not None:
                 attr.data = attr.data.to(dtype)
 
@@ -946,7 +952,7 @@ def resize_pos_embed(
     pos_emb_img = pos_emb_img.reshape(
         1, old_grid_size[0], old_grid_size[1], -1
     ).permute(0, 3, 1, 2)
-    pos_emb_img = F.interpolate(
+    pos_emb_img = f.interpolate(
         pos_emb_img,
         size=grid_size,
         mode=interpolation,
@@ -986,7 +992,7 @@ def resize_text_pos_embed(
         'Resizing text position embedding num_pos from %s to %s', old_num_pos, num_pos
     )
     old_pos_embed = old_pos_embed.reshape(1, old_num_pos, old_width).permute(0, 2, 1)
-    old_pos_embed = F.interpolate(
+    old_pos_embed = f.interpolate(
         old_pos_embed,
         size=num_pos,
         mode=interpolation,

@@ -413,7 +413,12 @@ def main(args):
                     f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})"
                 )
 
-    loss, mtl_losses = create_losses(args)
+    embed_dim = (
+        model.module.embed_dim
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel)
+        else model.embed_dim
+    )
+    loss, mtl_losses = create_losses(args, embed_dim=embed_dim)
 
     tokenizer = get_tokenizer(args.model, context_length=args.max_sequence_length)
     data = create_dataloaders(
