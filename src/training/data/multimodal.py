@@ -21,6 +21,7 @@ from torch.utils.data import (
     get_worker_info,
 )
 from torch.utils.data.distributed import DistributedSampler
+from webdataset.autodecode import ImageHandler, IMAGE_EXTENSIONS
 from webdataset.filters import _shuffle
 from webdataset.tariterators import (
     base_plus_ext,
@@ -33,6 +34,10 @@ try:
     import horovod.torch as hvd
 except ImportError:
     hvd = None
+
+
+_IMAGE_EXTENSIONS = IMAGE_EXTENSIONS + ['image']
+_TEXT_EXTENSIONS = ['txt', 'text', 'caption']
 
 
 def expand_urls(urls, weights=None):
@@ -87,11 +92,11 @@ def count_samples(dataloader):
 
 
 def filter_no_caption(sample: Dict[str, Any]):
-    return 'txt' in sample
+    return any([ext in sample for ext in _TEXT_EXTENSIONS])
 
 
 def filter_no_image(sample: Dict[str, Any]):
-    return any([ext in sample for ext in {'png', 'jpeg', 'jpg', 'webp'}])
+    return any([ext in sample for ext in _IMAGE_EXTENSIONS])
 
 
 def filter_no_caption_or_no_image(sample: Dict[str, Any]):
@@ -159,8 +164,8 @@ def pytorch_worker_seed(increment=0):
 
 _SHARD_SHUFFLE_SIZE = 2000
 _SHARD_SHUFFLE_INITIAL = 500
-_SAMPLE_SHUFFLE_SIZE = 5000
-_SAMPLE_SHUFFLE_INITIAL = 1000
+_SAMPLE_SHUFFLE_SIZE = 10000
+_SAMPLE_SHUFFLE_INITIAL = 2000
 
 
 class _SharedEpoch:
@@ -459,82 +464,77 @@ def get_wds_dataset(
             'replacement (with --dataset-resampled).'
         )
 
-    if resampled:
-        pipeline = [
-            _ResampledShards(
-                shards,
-                weights=upsampling_factors,
-                deterministic=True,
-                epoch=shared_epoch,
-            )
-        ]
-    else:
-        pipeline = [wds.SimpleShardList(shards)]
-
-    # at this point we have an iterator over all the shards
     if is_train:
-        if not resampled:
-            pipeline.extend(
-                [
-                    _DETShuffle(
-                        bufsize=_SHARD_SHUFFLE_SIZE,
-                        initial=_SHARD_SHUFFLE_INITIAL,
-                        seed=seed,
-                        epoch=shared_epoch,
-                    ),
-                    wds.split_by_node,
-                    wds.split_by_worker,
-                ]
-            )
-        pipeline.extend(
-            [
-                # at this point, we have an iterator over the shards assigned to
-                # each worker at each node
-                tarfile_to_samples_nothrow,
-                wds.shuffle(
-                    bufsize=_SAMPLE_SHUFFLE_SIZE,
-                    initial=_SAMPLE_SHUFFLE_INITIAL,
+        if resampled:
+            _shard_pipeline = [
+                _ResampledShards(
+                    shards,
+                    weights=upsampling_factors,
+                    deterministic=True,
+                    epoch=shared_epoch,
                 ),
+                tarfile_to_samples_nothrow,
             ]
-        )
-    else:
-        pipeline.extend(
-            [
+        else:
+            _shard_pipeline = [
+                wds.SimpleShardList(shards),
+                _DETShuffle(
+                    bufsize=_SHARD_SHUFFLE_SIZE,
+                    initial=_SHARD_SHUFFLE_INITIAL,
+                    seed=seed,
+                    epoch=shared_epoch,
+                ),
+                wds.split_by_node,
                 wds.split_by_worker,
-                # at this point, we have an iterator over the shards assigned to
-                # each worker
-                wds.tarfile_to_samples(handler=log_and_continue),
+                tarfile_to_samples_nothrow,
             ]
-        )
+    else:
+        _shard_pipeline = [
+            wds.SimpleShardList(shards),
+            wds.split_by_worker,
+            wds.tarfile_to_samples(handler=log_and_continue),
+        ]
 
     if images_pairs:
-        pipeline.extend(
-            [
-                wds.select(filter_no_image),
-                wds.decode('pilrgb', handler=log_and_continue),
-                wds.rename(
-                    image_left='jpg;png;jpeg;webp', image_right='jpg;png;jpeg;webp'
-                ),
-                wds.map_dict(image_left=preprocess_fn, image_right=preprocess_fn),
-                wds.to_tuple('image_left', 'image_right'),
-                wds.batched(batch_size, partial=not is_train),
-            ]
-        )
+        _sample_pipeline = [
+            wds.select(filter_no_image),
+            wds.decode(
+                ImageHandler('pilrgb', extensions=_IMAGE_EXTENSIONS),
+                handler=log_and_continue
+            ),
+            wds.rename(
+                image_left=';'.join(_IMAGE_EXTENSIONS),
+                image_right=';'.join(_IMAGE_EXTENSIONS),
+            ),
+            wds.map_dict(image_left=preprocess_fn, image_right=preprocess_fn),
+            wds.to_tuple('image_left', 'image_right'),
+        ]
     else:
-        pipeline.extend(
-            [
-                wds.select(filter_no_caption_or_no_image),
-                wds.decode('pilrgb', handler=log_and_continue),
-                wds.rename(image='jpg;png;jpeg;webp', text='txt'),
-                wds.pipelinefilter(_custom_webdataset_sampling_stage)(
-                    use_long_captions=use_long_captions
-                ),
-                wds.map_dict(image=preprocess_fn, text=lambda text: tokenizer(text)[0]),
-                wds.to_tuple('image', 'text'),
-                wds.batched(batch_size, partial=not is_train),
-            ]
-        )
+        _sample_pipeline = [
+            wds.select(filter_no_caption_or_no_image),
+            wds.decode(
+                ImageHandler('pilrgb', extensions=_IMAGE_EXTENSIONS),
+                handler=log_and_continue
+            ),
+            wds.rename(
+                image=';'.join(_IMAGE_EXTENSIONS),
+                text=';'.join(_TEXT_EXTENSIONS),
+            ),
+            wds.pipelinefilter(_custom_webdataset_sampling_stage)(
+                use_long_captions=use_long_captions
+            ),
+            wds.map_dict(image=preprocess_fn, text=lambda text: tokenizer(text)[0]),
+            wds.to_tuple('image', 'text'),
+        ]
 
+    _batch_pipeline = []
+    if is_train:
+        _batch_pipeline = [
+            wds.shuffle(bufsize=_SAMPLE_SHUFFLE_SIZE, initial=_SAMPLE_SHUFFLE_INITIAL)
+        ]
+    _batch_pipeline.extend([wds.batched(batch_size, partial=not is_train)])
+
+    pipeline = _shard_pipeline + _sample_pipeline + _batch_pipeline
     dataset = wds.DataPipeline(*pipeline)
 
     if is_train:

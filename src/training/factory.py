@@ -249,13 +249,13 @@ def _create_images_dataloader(
     # See Section 3 and Appendix A
     s = 1.0  # strength parameter, stronger color jitter equals better results
     pipeline = [
+        transforms.RandomHorizontalFlip(p=0.5),
         RandomResizedCropAndInterpolation(
             preprocess_cfg.size,
             scale=(0.08, 1.0),
             ratio=(3.0 / 4.0, 4.0 / 3.0),
             interpolation=preprocess_cfg.interpolation,
         ),
-        transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomApply(
             [transforms.ColorJitter(0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s)], p=0.8
         ),
