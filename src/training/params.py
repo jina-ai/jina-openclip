@@ -479,6 +479,18 @@ def parse_args(args):
         help='Use SigLIP (sigmoid) loss.',
     )
     parser.add_argument(
+        '--siglip-bidirectional',
+        default=False,
+        action='store_true',
+        help='Calculate SigLIP loss in two directions.',
+    )
+    parser.add_argument(
+        '--siglip-chunked',
+        default=False,
+        action='store_true',
+        help='Use the efficient "chunked" SigLIP implementation.',
+    )
+    parser.add_argument(
         '--matryoshka',
         default=False,
         action='store_true',

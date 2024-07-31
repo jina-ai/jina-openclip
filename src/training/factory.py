@@ -67,7 +67,12 @@ def _create_contrastive_loss(args, embed_dim: int):
         assert not args.horovod, 'Horovod not currently supported for SigLIP'
 
         logger.debug(f'Loss class: {SigLIPLoss.__name__}')
-        loss = SigLIPLoss(rank=args.rank, world_size=args.world_size)
+        loss = SigLIPLoss(
+            rank=args.rank,
+            world_size=args.world_size,
+            bidirectional=args.siglip_bidirectional,
+            chunked=args.siglip_chunked,
+        )
     else:
         logger.debug(f'Loss class: {InfoNCELoss.__name__}')
         loss = InfoNCELoss(
