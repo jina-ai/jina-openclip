@@ -86,7 +86,10 @@ def main(args):
         os.makedirs(_log_base_path, exist_ok=True)
         _log_filename = f'out-{args.rank}.log' if args.log_local else 'out.log'
         args.log_path = os.path.join(_log_base_path, _log_filename)
-        if os.path.exists(args.log_path) and not _resume_latest:
+        if (
+            os.path.exists(args.log_path) and not 
+            (_resume_latest or args.resume_logs)
+        ):
             logger.error(
                 f'Experiment {args.name} already exists. Use --name to '
                 'specify a new experiment.'
@@ -477,7 +480,7 @@ def main(args):
             id=args.name,
             notes=args.wandb_notes,
             tags=[],
-            resume='auto' if args.resume == 'latest' else None,
+            resume='auto' if (_resume_latest or args.resume_logs) else None,
             config=vars(args),
         )
         if args.debug:

@@ -616,6 +616,12 @@ def parse_args(args):
         help='Resume for a checkpoint path.',
     )
     parser.add_argument(
+        '--resume-logs',
+         action='store_true',
+        default=False,
+        help='Resume logging on an existing run',
+    )
+    parser.add_argument(
         '--save-frequency',
         type=int,
         default=1,
