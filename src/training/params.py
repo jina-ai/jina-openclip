@@ -617,9 +617,9 @@ def parse_args(args):
     )
     parser.add_argument(
         '--resume-logs',
-         action='store_true',
+        action='store_true',
         default=False,
-        help='Resume logging on an existing run',
+        help='Resume logging on an existing run.',
     )
     parser.add_argument(
         '--save-frequency',
