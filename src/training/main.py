@@ -79,6 +79,7 @@ def main(args):
         )
 
     _resume_latest = args.resume == 'latest'
+    _resume_logs = args.resume_logs and (args.resume is not None)
     _log_base_path = os.path.join(args.logs, args.name)
 
     args.log_path = None
@@ -88,7 +89,7 @@ def main(args):
         args.log_path = os.path.join(_log_base_path, _log_filename)
         if (
             os.path.exists(args.log_path) and not 
-            (_resume_latest or args.resume_logs)
+            (_resume_latest or _resume_logs)
         ):
             logger.error(
                 f'Experiment {args.name} already exists. Use --name to '
@@ -480,7 +481,7 @@ def main(args):
             id=args.name,
             notes=args.wandb_notes,
             tags=[],
-            resume='auto' if (_resume_latest or args.resume_logs) else None,
+            resume='auto' if (_resume_latest or _resume_logs) else None,
             config=vars(args),
         )
         if args.debug:
