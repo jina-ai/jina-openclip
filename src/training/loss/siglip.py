@@ -4,6 +4,14 @@ import torch
 from torch import nn
 from torch.nn import functional as f
 
+try:
+    from torch import distributed as dist
+
+    has_distributed = True
+except ImportError:
+    dist = None
+    has_distributed = False
+
 
 def _neighbour_exchange(
     from_rank: int, to_rank: int, tensor: torch.Tensor, group: Any = None
@@ -159,6 +167,7 @@ class SigLIPLoss(nn.Module):
         bidirectional: bool = True,
         rank: int = 0,
         world_size: int = 1,
+        chunked: bool = False,
     ):
         super().__init__()
 
@@ -167,6 +176,15 @@ class SigLIPLoss(nn.Module):
         self._logit_scale = torch.exp(torch.log(torch.tensor([1 / temperature])))
         self._logit_bias = logit_bias
         self._bidirectional = bidirectional
+        self._chunked = chunked
+
+    def get_distributed_features(self, features: torch.Tensor):
+        _gathered_features = [
+            torch.zeros_like(features) for _ in range(self._world_size)
+        ]
+        dist.all_gather(_gathered_features, features)
+        _gathered_features[self._rank] = features
+        return torch.cat(_gathered_features, dim=0)
 
     @staticmethod
     def sigmoid_loss(
@@ -206,63 +224,88 @@ class SigLIPLoss(nn.Module):
         a_features = left_features
         b_features = right_features
 
-        loss = self.sigmoid_loss(a_features, b_features, logit_scale, logit_bias)
+        if self._chunked:
 
-        if self._world_size > 1:
+            loss = self.sigmoid_loss(a_features, b_features, logit_scale, logit_bias)
 
-            # exchange text features w/ neighbour world_size - 1 times
-            right_rank = (self._rank + 1) % self._world_size
-            left_rank = (self._rank - 1 + self._world_size) % self._world_size
+            if self._world_size > 1:
 
-            if self._bidirectional:
+                # exchange text features w/ neighbour world_size - 1 times
+                right_rank = (self._rank + 1) % self._world_size
+                left_rank = (self._rank - 1 + self._world_size) % self._world_size
 
-                b_features_to_right = b_features_to_left = b_features
-                num_bidir, remainder = divmod(self._world_size - 1, 2)
-                for i in range(num_bidir):
-                    b_features_received = neighbour_exchange_bidirectional_with_grad(
-                        left_rank=left_rank,
-                        right_rank=right_rank,
-                        tensor_to_left=b_features_to_left,
-                        tensor_to_right=b_features_to_right,
-                    )
-                    for feats in b_features_received:
+                if self._bidirectional:
+
+                    b_features_to_right = b_features
+                    b_features_to_left = b_features
+                    num_bidir, remainder = divmod(self._world_size - 1, 2)
+
+                    for i in range(num_bidir):
+
+                        b_features_from_left = neighbour_exchange_with_grad(
+                            from_rank=left_rank,
+                            to_rank=right_rank,
+                            tensor=b_features_to_right,
+                        )
                         loss += self.sigmoid_loss(
                             a_features,
-                            feats,
+                            b_features_from_left,
+                            logit_scale=logit_scale,
+                            logit_bias=logit_bias,
+                            negative_only=True,
+                        )
+                        b_features_to_right = b_features_from_left
+
+                        b_features_from_right = neighbour_exchange_with_grad(
+                            from_rank=right_rank,
+                            to_rank=left_rank,
+                            tensor=b_features_to_left,
+                        )
+                        loss += self.sigmoid_loss(
+                            a_features,
+                            b_features_from_right,
+                            logit_scale=logit_scale,
+                            logit_bias=logit_bias,
+                            negative_only=True,
+                        )
+                        b_features_to_left = b_features_from_right
+
+                    if remainder:
+                        b_features_from_left = neighbour_exchange_with_grad(
+                            from_rank=left_rank,
+                            to_rank=right_rank,
+                            tensor=b_features_to_right,
+                        )
+                        loss += self.sigmoid_loss(
+                            a_features,
+                            b_features_from_left,
                             logit_scale,
                             logit_bias,
                             negative_only=True,
                         )
-                    b_features_to_left, b_features_to_right = b_features_received
 
-                if remainder:
-                    b_features_from_left = neighbour_exchange_with_grad(
-                        from_rank=left_rank,
-                        to_rank=right_rank,
-                        tensor=b_features_to_right,
-                    )
-                    loss += self.sigmoid_loss(
-                        a_features,
-                        b_features_from_left,
-                        logit_scale,
-                        logit_bias,
-                        negative_only=True,
-                    )
-            else:
-                b_features_to_right = b_features
-                for i in range(self._world_size - 1):
-                    b_features_from_left = neighbour_exchange_with_grad(
-                        from_rank=left_rank,
-                        to_rank=right_rank,
-                        tensor=b_features_to_right,
-                    )
-                    loss += self.sigmoid_loss(
-                        a_features,
-                        b_features_from_left,
-                        logit_scale=logit_scale,
-                        logit_bias=logit_bias,
-                        negative_only=True,
-                    )
-                    b_features_to_right = b_features_from_left
+                else:
+                    b_features_to_right = b_features
+                    for i in range(self._world_size - 1):
+                        b_features_from_left = neighbour_exchange_with_grad(
+                            from_rank=left_rank,
+                            to_rank=right_rank,
+                            tensor=b_features_to_right,
+                        )
+                        loss += self.sigmoid_loss(
+                            a_features,
+                            b_features_from_left,
+                            logit_scale=logit_scale,
+                            logit_bias=logit_bias,
+                            negative_only=True,
+                        )
+                        b_features_to_right = b_features_from_left
+
+        else:
+            if self._world_size > 1:
+                a_features = self.get_distributed_features(a_features)
+                b_features = self.get_distributed_features(b_features)
+
+            loss = self.sigmoid_loss(a_features, b_features, logit_scale, logit_bias)
 
         return {'contrastive_loss': loss} if output_dict else loss
