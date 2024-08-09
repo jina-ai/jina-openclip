@@ -811,6 +811,12 @@ def parse_args(args):
         help='How often (in epochs) to run evaluation on the Vidore benchmark.',
     )
     parser.add_argument(
+        '--cbir-benchmark-frequency',
+        type=int,
+        default=1,
+        help='How often (in epochs) to run evaluation on the CBIR benchmark.',
+    )
+    parser.add_argument(
         '--simgraph-frequency',
         type=int,
         default=1,
@@ -938,6 +944,12 @@ def parse_args(args):
             'Define a comma separated list of metric names, that will be kept from the '
             'Vidore evaluation.'
         ),
+    )
+    parser.add_argument(
+        '--cbir-batch-size',
+        type=int,
+        default=256,
+        help='Define the batch size that will be used on the CBIR benchmark.',
     )
 
     args = parser.parse_args(args)

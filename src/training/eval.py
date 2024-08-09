@@ -298,7 +298,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             embeddings = []
             with torch.inference_mode():
                 for i in range(0, len(sentences), batch_size):
-                    batch = sentences[i: i + batch_size]
+                    batch = sentences[i : i + batch_size]
                     embeddings.append(self._embed(batch))
 
             return np.concatenate(embeddings, axis=0)
@@ -391,13 +391,12 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
         def forward_queries(
             self, queries, batch_size: int, **kwargs
         ) -> List[torch.Tensor]:
-
             list_emb_queries: List[torch.Tensor] = []
             with torch.no_grad(), autocast():
                 for query_batch in tqdm(
                     batched(queries, batch_size),
                     desc='Query batch',
-                    total=math.ceil(len(queries) / batch_size)
+                    total=math.ceil(len(queries) / batch_size),
                 ):
                     query_batch = cast(List[str], query_batch)
                     inputs_queries = self.tokenizer(query_batch).to(self.device)
@@ -410,17 +409,17 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
         def forward_documents(
             self, documents, batch_size: int, **kwargs
         ) -> List[torch.Tensor]:
-
             list_emb_documents: List[torch.Tensor] = []
             with torch.no_grad(), torch.cuda.amp.autocast():
                 for doc_batch in tqdm(
                     batched(documents, batch_size),
                     desc='Document batch',
-                    total=math.ceil(len(documents) / batch_size)
+                    total=math.ceil(len(documents) / batch_size),
                 ):
                     doc_batch = cast(List[Image.Image], doc_batch)
                     list_doc = [
-                        document.convert('RGB') for document in doc_batch
+                        document.convert('RGB')
+                        for document in doc_batch
                         if isinstance(document, Image.Image)
                     ]
                     input_image_processed = torch.cat(
@@ -428,7 +427,7 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
                             self.transform(d).unsqueeze(0).to(self.device)
                             for d in list_doc
                         ],
-                        dim=0
+                        dim=0,
                     )
                     ps = self.model.encode_image(input_image_processed)
                     ps /= ps.norm(dim=-1, keepdim=True)
@@ -458,19 +457,20 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
     _dataset_split = args.vidore_dataset_split
 
     if _dataset_name is not None:
-
         dataset_id = _dataset_name
         logger.info(f'Evaluating {dataset_id} ...')
         dataset = cast(Dataset, load_dataset(dataset_id, split=_dataset_split))
         with autocast():
             metrics = evaluate_dataset(
-                retriever, dataset, batch_query=_batchsize, batch_doc=_batchsize,
+                retriever,
+                dataset,
+                batch_query=_batchsize,
+                batch_doc=_batchsize,
             )
         metrics = _filter_metrics(metrics, _select_metrics)
         metrics = {f'{dataset_id}-{k}': v for k, v in metrics.items()}
 
     elif _collection_name is not None:
-
         collection = huggingface_hub.get_collection(_collection_name)
         datasets = collection.items
         metrics = {}
@@ -494,6 +494,102 @@ def _run_vidore_benchmark(model, tokenizer, transform, epoch, args):
     logger.info('Finished Vidore benchmark!')
     logger.info('--------------------------------------------------------------------')
 
+    return metrics
+
+
+def _run_cbir_benchmark(model, transform, epoch, args):
+    if args.cbir_benchmark_frequency == 0 or (
+        (epoch % args.cbir_benchmark_frequency) != 0 and epoch != args.epochs
+    ):
+        return {}
+
+    logger.info('--------------------------------------------------------------------')
+    logger.info('Starting the CBIR benchmark ...')
+
+    autocast = get_autocast(args.precision)
+    metrics = {}
+
+    def extract_features(model, images, labels, batch_size, device):
+        all_features = []
+        all_labels = []
+        num_samples = len(images)
+        num_batches = num_samples // batch_size + int(num_samples % batch_size != 0)
+
+        for i in tqdm(range(num_batches)):
+            # Manually slice the dataset to get the current batch
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, num_samples)
+            batch_images = images[start_idx:end_idx]
+            batch_labels = labels[start_idx:end_idx]
+            transformed_images = [transform(image).to(device) for image in batch_images]
+
+            batch_tensor = torch.stack(transformed_images)
+
+            with torch.no_grad():
+                with autocast():
+                    features = model(batch_tensor)['image_features']
+            all_features.append(features)
+            all_labels.extend(batch_labels)
+
+        # Concatenate all features and labels
+        return torch.cat(all_features), torch.tensor(all_labels, device=device)
+
+    def compute_precision_at_k(features, labels, k=10):
+        total_queries = len(labels)
+        precision_at_k = 0
+
+        for i in range(total_queries):
+            # Get similarity scores for the current query
+            similarity_scores = f.cosine_similarity(features[i].unsqueeze(0), features)
+
+            # Sort the indices by similarity score (highest to lowest)
+            sorted_indices = torch.argsort(similarity_scores, descending=True)
+
+            # Get the top K similar images
+            top_k_indices = sorted_indices[:k]
+
+            # Calculate Precision@K
+            relevant_items = sum(
+                [1 for idx in top_k_indices if labels[idx] == labels[i]]
+            )
+            precision_at_k += relevant_items / k
+
+        precision_at_k /= total_queries
+        return precision_at_k
+
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        _model = model.module
+    else:
+        _model = model
+
+    task_list = [
+        'tanganke/stanford_cars',
+        'uoft-cs/cifar100',
+        'nelorth/oxford-flowers',
+        'dpdl-benchmark/sun397',
+    ]
+    for dataset in task_list:
+        dataset_id = dataset.split('/')[1]
+        logger.info(f'Evaluating {dataset_id} ...')
+        split = 'validation' if dataset_id == 'sun397' else 'test'
+        ds = load_dataset(dataset)[split]
+
+        if dataset_id == 'cifar100':
+            images = ds['img']
+            labels = ds['fine_label']
+        else:
+            images = ds['image']
+            labels = ds['label']
+
+        image_features, image_labels = extract_features(
+            _model, images, labels, args.cbir_batch_size, args.device
+        )
+        precision_at_10 = compute_precision_at_k(image_features, image_labels, k=10)
+
+        metrics[f'{dataset_id}-precision_at_10'] = precision_at_10
+
+    logger.info('Finished CBIR benchmark!')
+    logger.info('--------------------------------------------------------------------')
     return metrics
 
 
@@ -628,6 +724,9 @@ def evaluate(
         model, tokenizer, transform, epoch, args
     )
     metrics.update({f'vidore-{k}': v for k, v in vidore_benchmark_metrics.items()})
+
+    # cbir_benchmark_metrics = _run_cbir_benchmark(model, transform, epoch, args)
+    # metrics.update({f'cbir-{k}': v for k, v in cbir_benchmark_metrics.items()})
 
     _draw_similarity_graph(model, transform, tokenizer, epoch, args, step)
 
