@@ -725,8 +725,8 @@ def evaluate(
     )
     metrics.update({f'vidore-{k}': v for k, v in vidore_benchmark_metrics.items()})
 
-    # cbir_benchmark_metrics = _run_cbir_benchmark(model, transform, epoch, args)
-    # metrics.update({f'cbir-{k}': v for k, v in cbir_benchmark_metrics.items()})
+    cbir_benchmark_metrics = _run_cbir_benchmark(model, transform, epoch, args)
+    metrics.update({f'cbir-{k}': v for k, v in cbir_benchmark_metrics.items()})
 
     _draw_similarity_graph(model, transform, tokenizer, epoch, args, step)
 
