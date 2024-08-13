@@ -125,7 +125,7 @@ class InfoNCELoss(nn.Module):
             else:
                 _left_over_right = _all_left_features @ _all_right_features.T
                 if self._bidirectional:
-                    _right_over_left = _left_over_right.T
+                    _right_over_left = _all_right_features @ _all_left_features.T
         else:
             _left_over_right = left_features @ right_features.T
             if self._bidirectional:
