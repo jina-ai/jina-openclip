@@ -44,10 +44,10 @@ class CLIPVisionCfg:
     image_size: Union[Tuple[int, int], int] = 224
 
     ls_init_value: Optional[float] = None  # layer scale initial value
-    # what fraction of patches to dropout during training (0 would mean disabled and 
+    # what fraction of patches to dropout during training (0 would mean disabled and
     # no patches dropped) - 0.5 to 0.75 recommended in the paper for optimal results
     patch_dropout: float = 0.0
-    # whether to use attentional pooler in the last embedding layer 
+    # whether to use attentional pooler in the last embedding layer
     # (overrides pool_type)
     attentional_pool: bool = False
     attn_pooler_queries: int = 256  # n_queries for attentional pooler
@@ -326,6 +326,7 @@ def _build_vision_tower(
         if vision_cfg.fusedLN:
             try:
                 from apex.normalization import FusedLayerNorm
+
                 norm_layer = FusedLayerNorm
             except ModuleNotFoundError or ImportError:
                 norm_layer = (
@@ -378,6 +379,7 @@ def _build_vision_tower(
                 state_dict = {
                     key: value for key, value in state_dict.items() if 'rope' not in key
                 }
+                resize_eva_pos_embed(state_dict, visual)
                 visual.load_state_dict(state_dict, strict=False)
             else:
                 _error_str = (
@@ -920,6 +922,64 @@ def trace_model(model, batch_size=256, device=torch.device('cpu')):
     )
     model.visual.image_size = image_size
     return model
+
+
+def resize_eva_pos_embed(
+    state_dict, model, interpolation: str = 'bicubic', antialias: bool = True
+):
+    old_pos_embed = state_dict.get('pos_embed', None).squeeze(0)
+    if old_pos_embed is None:
+        return
+
+    old_total_positions = old_pos_embed.shape[0] - 1
+    old_grid_size = round(math.sqrt(old_total_positions))
+
+    model_pos_embed = getattr(model, 'pos_embed', None).squeeze(0)
+    if model_pos_embed is None:
+        return
+    # we do not interpolate the token embedding
+    new_total_positions = model_pos_embed.shape[0] - 1
+    new_grid_size = round(math.sqrt(new_total_positions))
+
+    if old_grid_size == new_grid_size:
+        return  # No need to resize if they already match
+
+    # Log the resizing operation
+    logger.info(
+        f'Resizing position embedding: length {old_grid_size**2+1} -> {new_grid_size**2+1}'
+    )
+
+    # Separating token embedding
+    pos_emb_tok, pos_emb_img = old_pos_embed[:1], old_pos_embed[1:]
+
+    # Reshape and interpolate the image positional embeddings
+    pos_emb_img = pos_emb_img.reshape(1, old_grid_size, old_grid_size, -1).permute(
+        0, 3, 1, 2
+    )
+
+    original_dtype = pos_emb_img.dtype
+    if pos_emb_img.dtype != torch.float32:
+        pos_emb_img = pos_emb_img.float()
+
+    pos_emb_img = f.interpolate(
+        pos_emb_img,
+        size=(new_grid_size, new_grid_size),
+        mode=interpolation,
+        antialias=antialias,
+        align_corners=False,
+    )
+    # Bring back to the original shape
+    pos_emb_img = pos_emb_img.permute(0, 2, 3, 1).reshape(
+        1, new_grid_size * new_grid_size, -1
+    )[0]
+
+    if original_dtype != torch.float32:
+        pos_emb_img = pos_emb_img.to(original_dtype)
+
+    # Concat the token embedding
+    new_pos_embed = torch.cat([pos_emb_tok, pos_emb_img], dim=0)
+    new_pos_embed = new_pos_embed.unsqueeze(0)
+    state_dict['pos_embed'] = new_pos_embed
 
 
 def resize_pos_embed(
