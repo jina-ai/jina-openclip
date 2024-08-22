@@ -255,6 +255,9 @@ def load_checkpoint(
     resize_pos_embed(state_dict, model)
     resize_text_pos_embed(state_dict, model)
 
+    state_dict = {key: value for key, value in state_dict.items() if 'rope' not in key}
+    resize_eva_pos_embed(state_dict, model)
+
     if exclude:
         _state_dict = {}
         for k, v in state_dict.items():
@@ -269,7 +272,7 @@ def load_checkpoint(
                 f"Got an empty state dict after filtering using exclude '{exclude}'"
             )
 
-    incompatible_keys = model.load_state_dict(state_dict, strict=strict)
+    incompatible_keys = model.load_state_dict(state_dict, strict=False)
 
     return incompatible_keys
 
@@ -365,8 +368,8 @@ def _build_vision_tower(
             subln=vision_cfg.subln,
             proj_type=vision_cfg.proj_type,
         )
-        _model_name = vision_cfg.eva_model_name
-        if _model_name is not None:
+        if vision_cfg.eva_pretrained is not None:
+            _model_name = vision_cfg.eva_model_name
             _tag = vision_cfg.eva_pretrained.replace(
                 '/', '-'
             )  # for callers using old naming with / in ViT names
@@ -924,62 +927,49 @@ def trace_model(model, batch_size=256, device=torch.device('cpu')):
     return model
 
 
-def resize_eva_pos_embed(
-    state_dict, model, interpolation: str = 'bicubic', antialias: bool = True
-):
-    old_pos_embed = state_dict.get('pos_embed', None).squeeze(0)
-    if old_pos_embed is None:
-        return
+def resize_eva_pos_embed(state_dict, model, interpolation: str = 'bicubic', seq_dim=1):
+    # interpolate position embedding
+    if 'visual.pos_embed' in state_dict:
+        pos_embed_checkpoint = state_dict['visual.pos_embed']
+        embedding_size = pos_embed_checkpoint.shape[-1]
+        num_patches = model.visual.patch_embed.num_patches
+        num_extra_tokens = model.visual.pos_embed.shape[-2] - num_patches
+        # height (== width) for the checkpoint position embedding
+        orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens) ** 0.5)
+        # height (== width) for the new position embedding
+        new_size = int(num_patches**0.5)
+        # class_token and dist_token are kept unchanged
+        if orig_size != new_size:
+            logger.info(
+                f'Resizing position embedding: length {orig_size**2+1} -> {new_size**2+1}'
+            )
+            extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
+            # only the position tokens are interpolated
+            pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
+            pos_tokens = pos_tokens.reshape(
+                -1, orig_size, orig_size, embedding_size
+            ).permute(0, 3, 1, 2)
+            original_dtype = pos_tokens.dtype
+            pos_tokens = torch.nn.functional.interpolate(
+                pos_tokens.float(),
+                size=(new_size, new_size),
+                mode='bicubic',
+                align_corners=False,
+            ).to(original_dtype)
+            pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
+            new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
+            state_dict['visual.pos_embed'] = new_pos_embed
 
-    old_total_positions = old_pos_embed.shape[0] - 1
-    old_grid_size = round(math.sqrt(old_total_positions))
-
-    model_pos_embed = getattr(model, 'pos_embed', None).squeeze(0)
-    if model_pos_embed is None:
-        return
-    # we do not interpolate the token embedding
-    new_total_positions = model_pos_embed.shape[0] - 1
-    new_grid_size = round(math.sqrt(new_total_positions))
-
-    if old_grid_size == new_grid_size:
-        return  # No need to resize if they already match
-
-    # Log the resizing operation
-    logger.info(
-        f'Resizing position embedding: length {old_grid_size**2+1} -> {new_grid_size**2+1}'
-    )
-
-    # Separating token embedding
-    pos_emb_tok, pos_emb_img = old_pos_embed[:1], old_pos_embed[1:]
-
-    # Reshape and interpolate the image positional embeddings
-    pos_emb_img = pos_emb_img.reshape(1, old_grid_size, old_grid_size, -1).permute(
-        0, 3, 1, 2
-    )
-
-    original_dtype = pos_emb_img.dtype
-    if pos_emb_img.dtype != torch.float32:
-        pos_emb_img = pos_emb_img.float()
-
-    pos_emb_img = f.interpolate(
-        pos_emb_img,
-        size=(new_grid_size, new_grid_size),
-        mode=interpolation,
-        antialias=antialias,
-        align_corners=False,
-    )
-    # Bring back to the original shape
-    pos_emb_img = pos_emb_img.permute(0, 2, 3, 1).reshape(
-        1, new_grid_size * new_grid_size, -1
-    )[0]
-
-    if original_dtype != torch.float32:
-        pos_emb_img = pos_emb_img.to(original_dtype)
-
-    # Concat the token embedding
-    new_pos_embed = torch.cat([pos_emb_tok, pos_emb_img], dim=0)
-    new_pos_embed = new_pos_embed.unsqueeze(0)
-    state_dict['pos_embed'] = new_pos_embed
+            patch_embed_proj = state_dict['visual.patch_embed.proj.weight']
+            patch_size = model.visual.patch_embed.patch_size
+            state_dict['visual.patch_embed.proj.weight'] = (
+                torch.nn.functional.interpolate(
+                    patch_embed_proj.float(),
+                    size=patch_size,
+                    mode='bicubic',
+                    align_corners=False,
+                ).to(original_dtype)
+            )
 
 
 def resize_pos_embed(
