@@ -3,7 +3,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, AutoModel, PretrainedConfig
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PretrainedConfig
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -324,7 +324,6 @@ class HFVisionEncoder(nn.Module):
         model_name_or_path: str,
         image_size: int,
         output_dim: int,
-        config: PretrainedConfig = None,
         pool_type: str = 'tok',
         proj_type: Optional[str] = None,
         proj_bias: bool = False,
@@ -334,34 +333,56 @@ class HFVisionEncoder(nn.Module):
         pretrained: bool = True,
         output_tokens: bool = False,
         trust_remote_code: bool = False,
+        is_composite: bool = False,
+        is_causal_lm: bool = False,
+        vision_config_field: Optional[str] = None,
+        vision_model_field: Optional[str] = None,
     ):
         super().__init__()
         self.output_tokens = output_tokens
         self.output_dim = output_dim
         self.image_size = (image_size, image_size)
 
-        if config is None:
-            self.config = AutoConfig.from_pretrained(
+        if is_composite:
+            assert vision_config_field
+            assert vision_model_field
+
+        model_kwargs = {
+            vision_config_field: {
+                "hidden_dropout_prob": hidden_drop,
+                "attention_probs_dropout_prob": attn_drop,
+                "drop_path_rate": drop_path,
+            }
+        } if is_composite else {
+            "hidden_dropout_prob": hidden_drop,
+            "attention_probs_dropout_prob": attn_drop,
+            "drop_path_rate": drop_path,
+        }
+        _model_class = AutoModelForCausalLM if is_causal_lm else AutoModel
+
+        if pretrained:
+            transformer = _model_class.from_pretrained(
                 model_name_or_path,
                 trust_remote_code=trust_remote_code,
-                hidden_dropout_prob=hidden_drop,
-                attention_probs_dropout_prob=attn_drop,
-                drop_path_rate=drop_path,
+                **model_kwargs,
             )
-            create_func, model_args = (
-                (AutoModel.from_pretrained, model_name_or_path)
-                if pretrained
-                else (AutoModel.from_config, self.config)
-            )
-            self.transformer = create_func(
-                model_args,
-                trust_remote_code=trust_remote_code,
-                hidden_dropout_prob=hidden_drop,
-                attention_probs_dropout_prob=attn_drop,
-            )
+            config = transformer.config
         else:
-            self.config = config
-            self.transformer = AutoModel.from_config(config)
+            config = AutoConfig.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=trust_remote_code,
+                **model_kwargs,
+            )
+            transformer = _model_class.from_config(config)
+
+        self.config = (
+            getattr(config, vision_config_field)
+            if is_composite else config
+        )
+        self.transformer = (
+            getattr(transformer, vision_model_field)
+            if is_composite else transformer
+        )
 
         if 'dinov2' in model_name_or_path:
             self.transformer.embeddings.mask_token.requires_grad = False

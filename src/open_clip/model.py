@@ -91,6 +91,11 @@ class CLIPVisionCfg:
     hf_vision_model_name: Optional[str] = None
     # use (imagenet) pretrained weights for named model
     hf_vision_model_pretrained: bool = False
+    hf_vision_is_composite: bool = False
+    hf_vision_is_causal_lm: bool = False
+    hf_vision_config_field: Optional[str] = None
+    hf_vision_model_field: Optional[str] = None
+    hf_vision_trust_remote_code: bool = False
     # feature pooling for timm model ('tok', 'avg', '')
     hf_vision_pool: str = 'avg'
     # linear projection for hf vision encoder output ('linear', 'mlp', '')
@@ -322,6 +327,11 @@ def _build_vision_tower(
             attn_drop=vision_cfg.hf_vision_attn_drop,
             hidden_drop=vision_cfg.hf_vision_hidden_states_drop,
             drop_path=vision_cfg.hf_vision_drop_path,
+            is_composite=vision_cfg.hf_vision_is_composite,
+            is_causal_lm=vision_cfg.hf_vision_is_causal_lm,
+            vision_config_field=vision_cfg.hf_vision_config_field,
+            vision_model_field=vision_cfg.hf_vision_model_field,
+            trust_remote_code=vision_cfg.hf_vision_trust_remote_code,
         )
     elif vision_cfg.eva_model_name:
         vision_heads = vision_cfg.width // vision_cfg.head_width
