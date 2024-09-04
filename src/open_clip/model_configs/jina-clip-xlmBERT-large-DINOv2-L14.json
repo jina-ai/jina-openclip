@@ -4,12 +4,14 @@
         "image_size": 224,
         "hf_vision_model_name": "facebook/dinov2-large",
         "hf_vision_model_pretrained": true,
+        "hf_vision_model_kwargs": {
+            "attention_probs_dropout_prob": 0.1,
+            "drop_path_rate": 0.5,
+            "hidden_dropout_prob": 0.1
+        },
         "hf_vision_pool": "avg",
-        "hf_vision_proj": "linear",
+        "hf_vision_proj": null,
         "hf_vision_proj_bias": false,
-        "hf_vision_hidden_states_drop": 0.0,
-        "hf_vision_attn_drop": 0.0,
-        "hf_vision_drop_path": null,
         "hf_vision_trust_remote_code": true
     },
     "text_cfg": {

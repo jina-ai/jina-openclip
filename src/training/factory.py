@@ -253,6 +253,8 @@ def _create_images_dataloader(
     # https://arxiv.org/pdf/2002.05709v3
     # See Section 3 and Appendix A
     s = 1.0  # strength parameter, stronger color jitter equals better results
+    imgsize = preprocess_cfg.size
+    imgsize = imgsize if isinstance(imgsize, int) else imgsize[0]
     pipeline = [
         transforms.RandomHorizontalFlip(p=0.5),
         RandomResizedCropAndInterpolation(
@@ -268,7 +270,7 @@ def _create_images_dataloader(
         transforms.RandomApply(
             [
                 transforms.GaussianBlur(
-                    kernel_size=int(preprocess_cfg.size * 0.1) + 1, sigma=(0.1, 2.0)
+                    kernel_size=int(imgsize * 0.1) + 1, sigma=(0.1, 2.0)
                 ),
             ],
             p=0.5,
