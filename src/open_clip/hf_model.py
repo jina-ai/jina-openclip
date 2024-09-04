@@ -347,13 +347,7 @@ class HFVisionEncoder(nn.Module):
             assert vision_config_field
             assert vision_model_field
 
-        model_kwargs = {
-            vision_config_field: {
-                "hidden_dropout_prob": hidden_drop,
-                "attention_probs_dropout_prob": attn_drop,
-                "drop_path_rate": drop_path,
-            }
-        } if is_composite else {
+        _model_options = {
             "hidden_dropout_prob": hidden_drop,
             "attention_probs_dropout_prob": attn_drop,
             "drop_path_rate": drop_path,
@@ -362,16 +356,12 @@ class HFVisionEncoder(nn.Module):
 
         if pretrained:
             transformer = _model_class.from_pretrained(
-                model_name_or_path,
-                trust_remote_code=trust_remote_code,
-                **model_kwargs,
+                model_name_or_path, trust_remote_code=trust_remote_code,
             )
             config = transformer.config
         else:
             config = AutoConfig.from_pretrained(
-                model_name_or_path,
-                trust_remote_code=trust_remote_code,
-                **model_kwargs,
+                model_name_or_path, trust_remote_code=trust_remote_code,
             )
             transformer = _model_class.from_config(config)
 
@@ -383,6 +373,11 @@ class HFVisionEncoder(nn.Module):
             getattr(transformer, vision_model_field)
             if is_composite else transformer
         )
+        for k, v in _model_options.items():
+            if hasattr(self.transformer, k):
+                setattr(self.transformer, k, v)
+            if hasattr(self.config, k):
+                setattr(self.config, k, v)
 
         if 'dinov2' in model_name_or_path:
             self.transformer.embeddings.mask_token.requires_grad = False
