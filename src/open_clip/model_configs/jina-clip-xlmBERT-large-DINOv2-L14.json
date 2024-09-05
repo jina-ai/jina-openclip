@@ -6,7 +6,7 @@
         "hf_vision_model_pretrained": true,
         "hf_vision_model_kwargs": {
             "attention_probs_dropout_prob": 0.1,
-            "drop_path_rate": 0.5,
+            "drop_path_rate": 0.0,
             "hidden_dropout_prob": 0.1
         },
         "hf_vision_pool": "avg",
