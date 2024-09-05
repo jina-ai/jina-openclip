@@ -1,0 +1,25 @@
+{
+    "embed_dim": 1024,
+    "vision_cfg": {
+        "image_size": 224,
+        "hf_vision_model_name": "facebook/dinov2-large",
+        "hf_vision_model_pretrained": true,
+        "hf_vision_model_kwargs": {
+            "attention_probs_dropout_prob": 0.1,
+            "drop_path_rate": 0.0,
+            "hidden_dropout_prob": 0.1
+        },
+        "hf_vision_pool": "avg",
+        "hf_vision_proj": null,
+        "hf_vision_proj_bias": false,
+        "hf_vision_trust_remote_code": true
+    },
+    "text_cfg": {
+        "context_length": 77,
+        "hf_model_name": "jinaai/jina-xlm-roberta-large-rope-8k",
+        "hf_tokenizer_name": "jinaai/jina-xlm-roberta-large-rope-8k",
+        "hf_pooler_type": "mean_pooler",
+        "hf_trust_remote_code": true,
+        "proj_type": null
+    }
+}

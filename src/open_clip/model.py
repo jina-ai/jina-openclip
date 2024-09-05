@@ -91,18 +91,18 @@ class CLIPVisionCfg:
     hf_vision_model_name: Optional[str] = None
     # use (imagenet) pretrained weights for named model
     hf_vision_model_pretrained: bool = False
+    hf_vision_model_kwargs: Optional[Dict[str, Any]] = None
+    hf_vision_is_composite: bool = False
+    hf_vision_is_causal_lm: bool = False
+    hf_vision_config_field: Optional[str] = None
+    hf_vision_model_field: Optional[str] = None
+    hf_vision_trust_remote_code: bool = False
     # feature pooling for timm model ('tok', 'avg', '')
     hf_vision_pool: str = 'avg'
     # linear projection for hf vision encoder output ('linear', 'mlp', '')
     hf_vision_proj: str = 'linear'
     # enable bias final projection
     hf_vision_proj_bias: bool = False
-    # vision model hidden states dropout
-    hf_vision_hidden_states_drop: float = 0.0
-    # vision model attention probabilities dropout
-    hf_vision_attn_drop: float = 0.0
-    # backbone stochastic depth
-    hf_vision_drop_path: Optional[float] = None
 
     eva_model_name: str = (
         None  # a valid eva model name overrides layers, width, patch_size
@@ -312,6 +312,7 @@ def _build_vision_tower(
     elif vision_cfg.hf_vision_model_name:
         visual = HFVisionEncoder(
             vision_cfg.hf_vision_model_name,
+            model_kwargs=vision_cfg.hf_vision_model_kwargs,
             output_dim=embed_dim,
             proj_type=vision_cfg.hf_vision_proj,
             proj_bias=vision_cfg.hf_vision_proj_bias,
@@ -319,9 +320,11 @@ def _build_vision_tower(
             pretrained=vision_cfg.hf_vision_model_pretrained,
             output_tokens=vision_cfg.output_tokens,
             image_size=vision_cfg.image_size,
-            attn_drop=vision_cfg.hf_vision_attn_drop,
-            hidden_drop=vision_cfg.hf_vision_hidden_states_drop,
-            drop_path=vision_cfg.hf_vision_drop_path,
+            is_composite=vision_cfg.hf_vision_is_composite,
+            is_causal_lm=vision_cfg.hf_vision_is_causal_lm,
+            vision_config_field=vision_cfg.hf_vision_config_field,
+            vision_model_field=vision_cfg.hf_vision_model_field,
+            trust_remote_code=vision_cfg.hf_vision_trust_remote_code,
         )
     elif vision_cfg.eva_model_name:
         vision_heads = vision_cfg.width // vision_cfg.head_width

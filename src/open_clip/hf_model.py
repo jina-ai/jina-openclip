@@ -1,9 +1,9 @@
 import re
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, AutoModel, PretrainedConfig
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PretrainedConfig
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -324,52 +324,76 @@ class HFVisionEncoder(nn.Module):
         model_name_or_path: str,
         image_size: int,
         output_dim: int,
-        config: PretrainedConfig = None,
+        model_kwargs: Optional[Dict[str, Any]] = None,
         pool_type: str = 'tok',
         proj_type: Optional[str] = None,
         proj_bias: bool = False,
-        attn_drop: float = 0.0,
-        hidden_drop: float = 0.0,
-        drop_path: Optional[float] = None,
         pretrained: bool = True,
         output_tokens: bool = False,
         trust_remote_code: bool = False,
+        is_composite: bool = False,
+        is_causal_lm: bool = False,
+        vision_config_field: Optional[str] = None,
+        vision_model_field: Optional[str] = None,
     ):
         super().__init__()
         self.output_tokens = output_tokens
         self.output_dim = output_dim
         self.image_size = (image_size, image_size)
 
-        if config is None:
-            self.config = AutoConfig.from_pretrained(
+        if is_composite:
+            assert vision_config_field
+            assert vision_model_field
+
+        if is_composite:
+            _model_kwargs = {}
+        else:
+            _model_kwargs = model_kwargs or {}
+
+        _model_class = AutoModelForCausalLM if is_causal_lm else AutoModel
+
+        if pretrained:
+            transformer = _model_class.from_pretrained(
                 model_name_or_path,
                 trust_remote_code=trust_remote_code,
-                hidden_dropout_prob=hidden_drop,
-                attention_probs_dropout_prob=attn_drop,
-                drop_path_rate=drop_path,
+                **_model_kwargs,
             )
-            create_func, model_args = (
-                (AutoModel.from_pretrained, model_name_or_path)
-                if pretrained
-                else (AutoModel.from_config, self.config)
-            )
-            self.transformer = create_func(
-                model_args,
-                trust_remote_code=trust_remote_code,
-                hidden_dropout_prob=hidden_drop,
-                attention_probs_dropout_prob=attn_drop,
-            )
+            config = transformer.config
         else:
-            self.config = config
-            self.transformer = AutoModel.from_config(config)
+            config = AutoConfig.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=trust_remote_code,
+                **_model_kwargs,
+            )
+            transformer = _model_class.from_config(config)
+
+        self.config = (
+            getattr(config, vision_config_field)
+            if is_composite else config
+        )
+        self.transformer = (
+            getattr(transformer, vision_model_field)
+            if is_composite else transformer
+        )
 
         if 'dinov2' in model_name_or_path:
             self.transformer.embeddings.mask_token.requires_grad = False
 
+        self._transformer_forward = self._transformer_forward_generic
+        self._set_grad_checkpointing = self._set_grad_checkpointing_generic
+        if 'Florence-2' in model_name_or_path:
+            self._transformer_forward = self._transformer_forward_florence2
+            self._set_grad_checkpointing = self._set_grad_checkpointing_florence2
+        elif 'InternViT' in model_name_or_path:
+            self._set_grad_checkpointing = self._set_grad_checkpointing_internvit
+
         assert pool_type in ('tok', 'avg', 'none')
         self.pool_type = pool_type
 
-        d_model = self.config.hidden_size
+        d_model = (
+            self.config.hidden_size if hasattr(self.config, 'hidden_size')
+            else self.config.dim_embed[-1]
+        )
         if (d_model == output_dim) and (proj_type is None):  # do we always need a proj?
             self.proj = nn.Identity()
         elif proj_type == 'linear':
@@ -381,6 +405,12 @@ class HFVisionEncoder(nn.Module):
                 nn.GELU(),
                 nn.Linear(hidden_size, output_dim, bias=proj_bias),
             )
+
+    def _transformer_forward_generic(self, x: torch.Tensor):
+        return self.transformer(x)[0]
+
+    def _transformer_forward_florence2(self, x: torch.Tensor):
+        return self.transformer.forward_features_unpool(x)
 
     def _global_pool(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.pool_type == 'avg':
@@ -394,7 +424,7 @@ class HFVisionEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor):
         # returns a tuple of (final hidden states, token pooled outputs)
-        x = self.transformer(x)[0]
+        x = self._transformer_forward(x)
         pooled, tokens = self._global_pool(x)
         projected = self.proj(pooled)
 
@@ -432,9 +462,18 @@ class HFVisionEncoder(nn.Module):
                     (not freeze_bn_stats) if 'LayerNorm' in n.split('.') else False
                 )
 
+    def _set_grad_checkpointing_generic(self):
+        self.transformer.gradient_checkpointing_enable()
+
+    def _set_grad_checkpointing_florence2(self):
+        self.transformer.enable_checkpoint = True
+
+    def _set_grad_checkpointing_internvit(self):
+        self.transformer.encoder.gradient_checkpointing = True
+
     @torch.jit.ignore
     def set_grad_checkpointing(self, *_, **__):
-        self.transformer.gradient_checkpointing_enable()
+        self._set_grad_checkpointing()
 
     def init_parameters(self):
         pass
