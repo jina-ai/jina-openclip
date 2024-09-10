@@ -476,7 +476,10 @@ def create_dataloaders(
             datasets=args.train_mtldata.split('::'),
             bucket=args.train_mtldata_s3bucket,
             input_type_dict={
-                task: lossfn.input_type for task, lossfn in mtl_losses.items()
+                task: lossfn._loss.input_type
+                if isinstance(lossfn, MatryoshkaOperator)
+                else lossfn.input_type
+                for task, lossfn in mtl_losses.items()
             },
             tokenizer=tokenizer.tokenizer,
             sampling_rates=upsampling_factors,
