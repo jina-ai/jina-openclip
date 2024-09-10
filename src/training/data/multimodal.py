@@ -247,6 +247,10 @@ class _ResampledShards(IterableDataset):
             if isinstance(nodes, str) else []
         )
         self.current_node = int(os.environ.get('GROUP_RANK', '0'))
+        print(
+            f'\n\n\n\n------------------\n{self.current_node}'
+            f'\n------------------\n\n\n\n'
+        )
 
         if self.weights is not None:
             assert len(self.urls) == len(self.weights), (
@@ -267,6 +271,8 @@ class _ResampledShards(IterableDataset):
                     weight for node, weight in zip(self.nodes, self.weights)
                     if node == self.current_node
                 ]
+
+        print(f'{self.urls}\n{self.weights}')
 
         assert isinstance(self.urls[0], str)
         self.nshards = nshards
