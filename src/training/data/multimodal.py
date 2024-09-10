@@ -232,6 +232,7 @@ class _ResampledShards(IterableDataset):
         self,
         urls: str,
         weights: Optional[str] = None,
+        nodes: Optional[str] = None,
         nshards: int = sys.maxsize,
         worker_seed: Optional[Callable] = None,
         deterministic: bool = False,
@@ -241,11 +242,32 @@ class _ResampledShards(IterableDataset):
         urls, weights = expand_urls(urls, weights)
         self.urls = urls
         self.weights = weights
+        self.nodes = (
+            [int(node) for node in nodes.split('::')]
+            if isinstance(nodes, str) else []
+        )
+        self.current_node = int(os.environ.get('GROUP_RANK', '0'))
+
         if self.weights is not None:
             assert len(self.urls) == len(self.weights), (
                 f'Number of urls {len(self.urls)} and weights {len(self.weights)} '
                 f'should match.'
             )
+        if len(self.nodes) > 0:
+            assert len(self.urls) == len(self.nodes), (
+                f'Number of urls {len(self.urls)} and nodes {len(self.nodes)} '
+                f'should match.'
+            )
+            self.urls = [
+                url for node, url in zip(self.nodes, self.urls)
+                if node == self.current_node
+            ]
+            if self.weights is not None:
+                self.weights = [
+                    weight for node, weight in zip(self.nodes, self.weights)
+                    if node == self.current_node
+                ]
+
         assert isinstance(self.urls[0], str)
         self.nshards = nshards
         self.rng = random.Random()
@@ -430,6 +452,7 @@ def get_wds_dataset(
     is_train: bool = False,
     tokenizer: Any = None,
     upsampling_factors: Optional[str] = None,
+    group_ids: Optional[str] = None,
     images_pairs: bool = False,
     use_long_captions: bool = False,
     workers: int = 1,
@@ -463,6 +486,11 @@ def get_wds_dataset(
             'Upsampling factors are only supported when sampling with '
             'replacement (with --dataset-resampled).'
         )
+    if is_train and group_ids is not None:
+        assert resampled, (
+            'Group IDs are only supported when sampling with '
+            'replacement (with --dataset-resampled).'
+        )
 
     if is_train:
         if resampled:
@@ -470,6 +498,7 @@ def get_wds_dataset(
                 _ResampledShards(
                     shards,
                     weights=upsampling_factors,
+                    nodes=group_ids,
                     deterministic=True,
                     epoch=shared_epoch,
                 ),
