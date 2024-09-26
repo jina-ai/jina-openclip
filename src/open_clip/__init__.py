@@ -23,6 +23,7 @@ from .model import (  # noqa: F401
     get_input_dtype,
     get_model_preprocess_cfg,
     get_model_tokenize_cfg,
+    resize_eva_pos_embed,
     set_model_preprocess_cfg,
     trace_model,
 )
