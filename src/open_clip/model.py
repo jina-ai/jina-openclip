@@ -932,11 +932,19 @@ def trace_model(model, batch_size=256, device=torch.device('cpu')):
 
 def resize_eva_pos_embed(state_dict, model, interpolation: str = 'bicubic', seq_dim=1):
     # interpolate position embedding
-    if 'visual.pos_embed' in state_dict:
-        pos_embed_checkpoint = state_dict['visual.pos_embed']
+    prepending = 'module.' if next(iter(state_dict)).startswith('module') else ''
+
+    # Check if the position embedding is in the state_dict
+    pos_embed_key = f'{prepending}visual.pos_embed'
+    if pos_embed_key in state_dict:
+        pos_embed_checkpoint = state_dict[pos_embed_key]
         embedding_size = pos_embed_checkpoint.shape[-1]
-        num_patches = model.visual.patch_embed.num_patches
-        num_extra_tokens = model.visual.pos_embed.shape[-2] - num_patches
+        num_patches = (
+            model.module.visual.patch_embed.num_patches
+            if hasattr(model, 'module')
+            else model.visual.patch_embed.num_patches
+        )
+        num_extra_tokens = model.state_dict()[pos_embed_key].shape[-2] - num_patches
         # height (== width) for the checkpoint position embedding
         orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens) ** 0.5)
         # height (== width) for the new position embedding
@@ -944,7 +952,7 @@ def resize_eva_pos_embed(state_dict, model, interpolation: str = 'bicubic', seq_
         # class_token and dist_token are kept unchanged
         if orig_size != new_size:
             logger.info(
-                f'Resizing position embedding: length {orig_size**2+1} -> {new_size**2+1}'
+                f'Resizing position embedding: length {orig_size**2 + 1} -> {new_size**2 + 1}'
             )
             extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
             # only the position tokens are interpolated
@@ -956,23 +964,28 @@ def resize_eva_pos_embed(state_dict, model, interpolation: str = 'bicubic', seq_
             pos_tokens = torch.nn.functional.interpolate(
                 pos_tokens.float(),
                 size=(new_size, new_size),
-                mode='bicubic',
+                mode=interpolation,
                 align_corners=False,
             ).to(original_dtype)
             pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
             new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
-            state_dict['visual.pos_embed'] = new_pos_embed
+            state_dict[pos_embed_key] = new_pos_embed
 
-            patch_embed_proj = state_dict['visual.patch_embed.proj.weight']
-            patch_size = model.visual.patch_embed.patch_size
-            state_dict['visual.patch_embed.proj.weight'] = (
-                torch.nn.functional.interpolate(
-                    patch_embed_proj.float(),
-                    size=patch_size,
-                    mode='bicubic',
-                    align_corners=False,
-                ).to(original_dtype)
+            # Resize the patch embedding projection
+            patch_embed_key = f'{prepending}visual.patch_embed.proj.weight'
+            patch_embed_proj = state_dict[patch_embed_key]
+            patch_size = (
+                model.module.visual.patch_embed.patch_size
+                if hasattr(model, 'module')
+                else model.visual.patch_embed.patch_size
             )
+
+            state_dict[patch_embed_key] = torch.nn.functional.interpolate(
+                patch_embed_proj.float(),
+                size=patch_size,
+                mode=interpolation,
+                align_corners=False,
+            ).to(original_dtype)
 
 
 def resize_pos_embed(

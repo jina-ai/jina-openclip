@@ -19,8 +19,7 @@ try:
 except ImportError:
     tensorboard = None
 
-from open_clip import create_model_and_transforms, get_tokenizer
-
+from open_clip import create_model_and_transforms, get_tokenizer, resize_eva_pos_embed
 from training.distributed import broadcast_object, init_distributed_device, is_master
 from training.eval import evaluate
 from training.factory import create_dataloaders, create_losses
@@ -87,10 +86,7 @@ def main(args):
         os.makedirs(_log_base_path, exist_ok=True)
         _log_filename = f'out-{args.rank}.log' if args.log_local else 'out.log'
         args.log_path = os.path.join(_log_base_path, _log_filename)
-        if (
-            os.path.exists(args.log_path) and not 
-            (_resume_latest or _resume_logs)
-        ):
+        if os.path.exists(args.log_path) and not (_resume_latest or _resume_logs):
             logger.error(
                 f'Experiment {args.name} already exists. Use --name to '
                 'specify a new experiment.'
@@ -297,6 +293,7 @@ def main(args):
             '   please make sure to use triton 2.0.0'
         )
         import bitsandbytes as bnb
+
         from open_clip.utils import replace_linear
 
         logger.debug(f'=> replacing linear layers with {args.use_bnb_linear}')
@@ -397,12 +394,37 @@ def main(args):
                 if not args.distributed and next(iter(sd.items()))[0].startswith(
                     'module'
                 ):
-                    sd = {k[len('module.'):]: v for k, v in sd.items()}
-                model.load_state_dict(sd)
+                    sd = {k[len('module.') :]: v for k, v in sd.items()}
+                sd = {key: value for key, value in sd.items() if 'rope' not in key}
+                resize_eva_pos_embed(sd, model)
+                model.load_state_dict(sd, strict=False)
                 if optimizer is not None:
                     checkpoint['optimizer']['param_groups'] = optimizer.state_dict()[
                         'param_groups'
                     ]
+
+                    # Retrieve the tensors
+                    exp_avg = checkpoint['optimizer']['state'][800]['exp_avg']
+                    exp_avg_sq = checkpoint['optimizer']['state'][800]['exp_avg_sq']
+
+                    # Calculate padding needed on the sequence dimension
+                    new_seq_len = sd.get(
+                        'visual.pos_embed', sd.get('module.visual.pos_embed')
+                    ).size(1)
+                    old_seq_len = exp_avg.size(1)
+                    pad_size = new_seq_len - old_seq_len
+                    if pad_size > 0:
+                        logger.info(
+                            f'Paddind position embedding optimizer gradients: length {old_seq_len} -> {new_seq_len}'
+                        )
+                        pad = (0, 0, 0, pad_size)
+                        checkpoint['optimizer']['state'][800]['exp_avg'] = (
+                            torch.nn.functional.pad(exp_avg, pad)
+                        )
+                        checkpoint['optimizer']['state'][800]['exp_avg_sq'] = (
+                            torch.nn.functional.pad(exp_avg_sq, pad)
+                        )
+
                     optimizer.load_state_dict(checkpoint['optimizer'])
                 if scaler is not None and 'scaler' in checkpoint:
                     scaler.load_state_dict(checkpoint['scaler'])
