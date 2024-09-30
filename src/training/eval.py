@@ -95,7 +95,7 @@ def _run_validation(model, data, epoch, args):
 
     with torch.no_grad():
         for i, batch in enumerate(dataloader):
-            images, texts = batch
+            _, __, images, texts = batch
             images = images.to(device=device, dtype=input_dtype, non_blocking=True)
             texts = texts.to(device=device, non_blocking=True)
 

@@ -1,8 +1,10 @@
+import json
 import math
 import time
 import warnings
-from collections import defaultdict
+from collections import defaultdict, Counter
 from itertools import islice
+from typing import Dict, List, Tuple
 
 import torch
 from loguru import logger
@@ -80,6 +82,71 @@ class _DummyWDSDataloader:
         return None, None
 
 
+class DatasetsShardsStats:
+
+    def __init__(self, data: Dict[str, Dict[str, int]]) -> None:
+        self._data = data
+
+    @property
+    def data(self) -> Dict[str, Dict[str, int]]:
+        return {
+            dataset: {
+                shard: self._data[dataset][shard]
+                for shard in sorted(self._data[dataset].keys())
+            }
+            for dataset in self.datasets
+        }
+
+    @property
+    def datasets(self) -> List[str]:
+        return list(sorted(self._data.keys()))
+
+    @property
+    def sums(self) -> Dict[str, int]:
+        return {
+            dataset: sum(self._data[dataset].values())
+            for dataset in self.datasets
+        }
+
+    def add(self, dataset: str, shard: str, freq: int) -> None:
+        if dataset in self._data:
+            if shard in self._data[dataset]:
+                self._data[dataset][shard] += freq
+            else:
+                self._data[dataset][shard] = freq
+        else:
+            self._data[dataset] = {shard: freq}
+
+    def update(self, new: Dict[str, Dict[str, int]]):
+        for dataset, shards in new.items():
+            for shard, freq in shards.items():
+                self.add(dataset, shard, freq)
+
+    @staticmethod
+    def get_dataset_and_shard_from_url(url: str) -> Tuple[str, str]:
+        if url.startswith('pipe:aws s3 cp s3://') and url.endswith('.tar -'):
+            url = url.replace('pipe:aws s3 cp s3://', '')
+            url = url.replace(' -', '')
+        url = url.replace('/data/commonpool/webdataset/', '')
+        url = url.replace('jina-clip-commonpool/multilingual-webdataset/', '')
+        url = url.replace('/home/jinaai/datasets/visualqa/', '')
+        url = url.replace('/home/jinaai/datasets/', '')
+        url = url.replace('/data/commonpool/', '')
+        dataset = '/'.join(url.split('/')[:-1])
+        shard = url.split('/')[-1]
+
+        return dataset, shard
+
+    def write(self, fname: str):
+        with open(fname, 'w') as f:
+            json.dump(self.data, f)
+
+    @classmethod
+    def load(cls, fname: str):
+        with open(fname, 'r') as f:
+            return cls(json.load(f))
+
+
 def train_one_epoch(
     model,
     data,
@@ -139,11 +206,14 @@ def train_one_epoch(
 
     start = time.time()
 
+    # multimodal_stats = DatasetsShardsStats({})
+    # image_stats = DatasetsShardsStats({})
+
     # training loop
     for i, (
-        (images, texts),
-        (_, (text_pairs, __)),
-        (images_left, images_right),
+        (_, urls, images, texts),
+        (_, (text_pairs, _)),
+        (_, image_urls, images_left, images_right),
         (mtldataset, (mtlbatch, mtllabels)),
     ) in enumerate(
         zip(
@@ -153,6 +223,15 @@ def train_one_epoch(
             islice(train_mtl_dataloader, 1, None),
         )
     ):
+
+        # for url, freq in Counter(urls).most_common():
+        #     d, s = DatasetsShardsStats.get_dataset_and_shard_from_url(url)
+        #     multimodal_stats.add(dataset=d, shard=s, freq=freq)
+        #
+        # for url, freq in Counter(image_urls).most_common():
+        #     d, s = DatasetsShardsStats.get_dataset_and_shard_from_url(url)
+        #     image_stats.add(dataset=d, shard=s, freq=freq)
+
         i_accum = i // args.accum_freq
         step = _num_batches_per_epoch * epoch + i_accum
 
@@ -606,3 +685,5 @@ def train_one_epoch(
             # resetting batch / data time meters per log window
             _batch_time_m.reset()
             _data_time_m.reset()
+
+    # return multimodal_stats, image_stats
