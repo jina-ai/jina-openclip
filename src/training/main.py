@@ -5,6 +5,7 @@ import sys
 import warnings
 from datetime import datetime
 
+import deepspeed.comm
 import numpy as np
 import torch
 from loguru import logger
@@ -394,7 +395,7 @@ def main(args):
                 if not args.distributed and next(iter(sd.items()))[0].startswith(
                     'module'
                 ):
-                    sd = {k[len('module.') :]: v for k, v in sd.items()}
+                    sd = {k[len('module.'):]: v for k, v in sd.items()}
                 sd = {key: value for key, value in sd.items() if 'rope' not in key}
                 resize_eva_pos_embed(sd, model)
                 model.load_state_dict(sd, strict=False)
@@ -415,7 +416,8 @@ def main(args):
                     pad_size = new_seq_len - old_seq_len
                     if pad_size > 0:
                         logger.info(
-                            f'Paddind position embedding optimizer gradients: length {old_seq_len} -> {new_seq_len}'
+                            f'Paddind position embedding optimizer gradients: '
+                            f'length {old_seq_len} -> {new_seq_len}'
                         )
                         pad = (0, 0, 0, pad_size)
                         checkpoint['optimizer']['state'][800]['exp_avg'] = (
@@ -458,6 +460,20 @@ def main(args):
     )
     assert len(data), 'At least one train or eval dataset must be specified.'
 
+    # multimodal_stats = DatasetsShardsStats({})
+    # image_stats = DatasetsShardsStats({})
+    # if is_master(args) and args.resume:
+    #     _resume_multimodal_dataset_ckpt = os.path.join(
+    #         args.resume, 'multimodal-dataset.json'
+    #     )
+    #     if os.path.isfile(_resume_multimodal_dataset_ckpt):
+    #         multimodal_stats = DatasetsShardsStats.load(
+    #             _resume_multimodal_dataset_ckpt
+    #         )
+    #     _resume_image_dataset_ckpt = os.path.join(args.resume, 'image-dataset.json')
+    #     if os.path.isfile(_resume_image_dataset_ckpt):
+    #         image_stats = DatasetsShardsStats.load(_resume_image_dataset_ckpt)
+
     # create scheduler if training
     scheduler = None
     if 'train' in data and optimizer is not None:
@@ -480,11 +496,9 @@ def main(args):
             scheduler_type=args.lr_scheduler,
         )
 
-    # determine if this worker should save logs and checkpoints. only do so if it
-    # is rank == 0
-    args.save_logs = args.logs and args.logs.lower() != 'none' and is_master(args)
+    args.save_logs = args.logs and args.logs.lower() != 'none'
     writer = None
-    if args.save_logs and args.tensorboard:
+    if args.save_logs and is_master(args) and args.tensorboard:
         assert tensorboard is not None, 'Please install tensorboard.'
         writer = tensorboard.SummaryWriter(args.tensorboard_path)
 
@@ -568,82 +582,138 @@ def main(args):
         _completed_epoch = epoch + 1
 
         # saving checkpoints
-        # is_master(args) can not be here while using deepspeed, otherwise ckpts
-        # can not be saved
-        if args.logs and args.logs.lower() != 'none' and args.deepspeed:
-            _ds_checkpoint_path = os.path.join(args.logs, args.name, 'checkpoints')
-            if _completed_epoch == args.epochs or (
-                args.save_frequency > 0
-                and (_completed_epoch % args.save_frequency) == 0
-            ):
-                client_state = {'epoch': _completed_epoch}
-                model.save_checkpoint(
-                    save_dir=_ds_checkpoint_path,
-                    tag=f'epoch-{str(_completed_epoch)}',
-                    client_state=client_state,
-                )
-        elif args.save_logs:
-            _checkpoint_dict = {
-                'epoch': _completed_epoch,
-                'name': args.name,
-                'state_dict': original_model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-            }
-            if scaler is not None:
-                _checkpoint_dict['scaler'] = scaler.state_dict()
+        if args.save_logs:
 
-            if _completed_epoch == args.epochs or (
-                args.save_frequency > 0
-                and (_completed_epoch % args.save_frequency) == 0
-            ):
-                _ckpt_dir = f'epoch-{_completed_epoch}'
-                os.makedirs(
-                    os.path.join(args.checkpoint_path, _ckpt_dir), exist_ok=False
-                )
-                _model_ckpt_path = os.path.join(
-                    args.checkpoint_path, _ckpt_dir, 'state.pt'
-                )
-                torch.save(_checkpoint_dict, _model_ckpt_path)
-                if data['train-text'] is not None:
-                    dataset_ckpt_path = os.path.join(
-                        args.checkpoint_path,
-                        _ckpt_dir,
-                        f'worker{args.rank}-s3-dataset.json',
+            # --- CREATE CHECKPOINT DIRECTORY
+            _ckpt_dir = os.path.join(args.checkpoint_path, f'epoch-{_completed_epoch}')
+            if is_master(args):
+                os.makedirs(_ckpt_dir, exist_ok=False)
+
+            # wait for all ranks
+            if args.deespeed:
+                deepspeed.comm.barrier()
+            else:
+                torch.distributed.barrier()
+
+            # --- SAVE MODEL
+            if args.deepspeed:
+                _ds_checkpoint_path = os.path.join(args.logs, args.name, 'checkpoints')
+                if _completed_epoch == args.epochs or (
+                    args.save_frequency > 0
+                    and (_completed_epoch % args.save_frequency) == 0
+                ):
+                    client_state = {'epoch': _completed_epoch}
+                    model.save_checkpoint(
+                        save_dir=_ds_checkpoint_path,
+                        tag=f'epoch-{str(_completed_epoch)}',
+                        client_state=client_state,
                     )
-                    data['train-text'][0].write_to_json(dataset_ckpt_path)
-                if data['train-mtl'] is not None:
-                    dataset_ckpt_path = os.path.join(
-                        args.checkpoint_path,
-                        _ckpt_dir,
-                        f'worker{args.rank}-mtl-dataset.json',
+            elif is_master(args):
+                _checkpoint_dict = {
+                    'epoch': _completed_epoch,
+                    'name': args.name,
+                    'state_dict': original_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                }
+                if scaler is not None:
+                    _checkpoint_dict['scaler'] = scaler.state_dict()
+
+                if _completed_epoch == args.epochs or (
+                    args.save_frequency > 0
+                    and (_completed_epoch % args.save_frequency) == 0
+                ):
+                    _model_ckpt_path = os.path.join(
+                        args.checkpoint_path, _ckpt_dir, 'state.pt'
                     )
-                    data['train-mtl'][0].write_to_json(dataset_ckpt_path)
+                    torch.save(_checkpoint_dict, _model_ckpt_path)
 
-            if args.delete_previous_checkpoint:
-                _previous_checkpoint = os.path.join(
-                    args.checkpoint_path, f'epoch-{_completed_epoch - 1}'
-                )
-                if os.path.exists(_previous_checkpoint):
-                    shutil.rmtree(_previous_checkpoint)
+                if args.save_most_recent:
+                    # try not to corrupt the latest checkpoint if save fails
+                    _tmp_save_path = os.path.join(args.checkpoint_path, 'tmp.pt')
+                    _latest_save_path = os.path.join(
+                        args.checkpoint_path, LATEST_CHECKPOINT_NAME
+                    )
+                    torch.save(_checkpoint_dict, _tmp_save_path)
+                    os.replace(_tmp_save_path, _latest_save_path)
 
-            if args.save_most_recent:
-                # try not to corrupt the latest checkpoint if save fails
-                _tmp_save_path = os.path.join(args.checkpoint_path, 'tmp.pt')
-                _latest_save_path = os.path.join(
-                    args.checkpoint_path, LATEST_CHECKPOINT_NAME
-                )
-                torch.save(_checkpoint_dict, _tmp_save_path)
-                os.replace(_tmp_save_path, _latest_save_path)
+            # --- SAVE DATASETS
 
-        evaluate(
-            model,
-            preprocess_val,
-            tokenizer,
-            data,
-            _completed_epoch,
-            args,
-            tb_writer=writer,
-        )
+            # # save multimodal dataset checkpoints
+            # _multimodal_stats.write(os.path.join(
+            #     _ckpt_dir, f'worker{args.rank}-multimodal-dataset.json',
+            # ))
+            #
+            # # save image dataset checkpoints
+            # _image_stats.write(os.path.join(
+            #     _ckpt_dir, f'worker{args.rank}-image-dataset.json',
+            # ))
+
+            # save text dataset checkpoints
+            if data['train-text'] is not None:
+                data['train-text'][0].write_to_json(os.path.join(
+                    _ckpt_dir, f'worker{args.rank}-s3-dataset.json',
+                ))
+
+            # save MTL dataset checkpoints
+            if data['train-mtl'] is not None:
+                data['train-mtl'][0].write_to_json(os.path.join(
+                    _ckpt_dir, f'worker{args.rank}-mtl-dataset.json',
+                ))
+
+            # wait for all ranks again
+            if args.deespeed:
+                deepspeed.comm.barrier()
+            else:
+                torch.distributed.barrier()
+
+            # if is_master(args):
+            #     # collect multimodal and image dataset checkpoints
+            #     epoch_multimodal_stats = DatasetsShardsStats({})
+            #     epoch_image_stats = DatasetsShardsStats({})
+            #     for rank in range(args.world_size):
+            #         rank_multimodal_stats = DatasetsShardsStats.load(os.path.join(
+            #             _ckpt_dir, f'worker{rank}-multimodal-dataset.json'
+            #         ))
+            #         rank_image_stats = DatasetsShardsStats.load(os.path.join(
+            #             _ckpt_dir, f'worker{rank}-image-dataset.json'
+            #         ))
+            #         epoch_multimodal_stats.update(rank_multimodal_stats)
+            #         epoch_image_stats.update(rank_image_stats)
+            #
+            #     # write full multimodal and image dataset checkpoints
+            #     epoch_multimodal_stats.write(
+            #         os.path.join(_ckpt_dir, f'epoch-multimodal-dataset.json')
+            #     )
+            #     epoch_image_stats.write(
+            #         os.path.join(_ckpt_dir, f'epoch-image-dataset.json')
+            #     )
+            #
+            #     multimodal_stats.update(epoch_multimodal_stats.data)
+            #     image_stats.update(epoch_image_stats.data)
+            #     multimodal_stats.write(
+            #         os.path.join(_ckpt_dir, f'multimodal-dataset.json')
+            #     )
+            #     image_stats.write(os.path.join(_ckpt_dir, f'image-dataset.json'))
+
+            # --- HOUSEKEEPING
+            if is_master(args):
+                if args.delete_previous_checkpoint:
+                    _previous_checkpoint = os.path.join(
+                        args.checkpoint_path, f'epoch-{_completed_epoch - 1}'
+                    )
+                    if os.path.exists(_previous_checkpoint):
+                        shutil.rmtree(_previous_checkpoint)
+
+        if is_master(args):
+            evaluate(
+                model,
+                preprocess_val,
+                tokenizer,
+                data,
+                _completed_epoch,
+                args,
+                tb_writer=writer,
+            )
 
     # stop wandb
     if args.wandb and is_master(args):

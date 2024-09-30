@@ -524,7 +524,7 @@ def get_wds_dataset(
                 use_long_captions=use_long_captions
             ),
             wds.map_dict(image=preprocess_fn, text=lambda text: tokenizer(text)[0]),
-            wds.to_tuple('image', 'text'),
+            wds.to_tuple('__key__', '__url__', 'image', 'text'),
         ]
 
     _batch_pipeline = []
