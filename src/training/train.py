@@ -79,7 +79,7 @@ class _DummyWDSDataloader:
         return self
 
     def __next__(self):
-        return None, None
+        return None, None, None, None
 
 
 class DatasetsShardsStats:

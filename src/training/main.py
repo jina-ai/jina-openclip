@@ -590,7 +590,7 @@ def main(args):
                 os.makedirs(_ckpt_dir, exist_ok=False)
 
             # wait for all ranks
-            if args.deespeed:
+            if args.deepspeed:
                 deepspeed.comm.barrier()
             else:
                 torch.distributed.barrier()
@@ -622,9 +622,7 @@ def main(args):
                     args.save_frequency > 0
                     and (_completed_epoch % args.save_frequency) == 0
                 ):
-                    _model_ckpt_path = os.path.join(
-                        args.checkpoint_path, _ckpt_dir, 'state.pt'
-                    )
+                    _model_ckpt_path = os.path.join(_ckpt_dir, 'state.pt')
                     torch.save(_checkpoint_dict, _model_ckpt_path)
 
                 if args.save_most_recent:
@@ -661,7 +659,7 @@ def main(args):
                 ))
 
             # wait for all ranks again
-            if args.deespeed:
+            if args.deepspeed:
                 deepspeed.comm.barrier()
             else:
                 torch.distributed.barrier()
