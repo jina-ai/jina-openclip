@@ -5,7 +5,18 @@ import numpy as np
 import torch
 import torch.nn.functional as f
 from torch import nn
+
 from training.data import InputType
+
+
+def split_embedding_pairs(embeddings):
+    if embeddings.shape[0] % 2 != 0:
+        raise ValueError(
+            'embeddings need to have an even number of rows otherwise it '
+            'cannot be converted to pairs.'
+        )
+    batch_size = embeddings.shape[0] // 2
+    return embeddings[:batch_size], embeddings[batch_size:]
 
 
 class CoSentSTSLoss(nn.Module):
@@ -25,18 +36,19 @@ class CoSentSTSLoss(nn.Module):
 
     def forward(
         self,
-        embeddings_u: torch.Tensor,
-        embeddings_v: torch.Tensor,
+        embeddings: torch.Tensor,
         labels: torch.Tensor,
         logit_scale: Optional[torch.Tensor] = None,
         output_dict: bool = False,
     ):
         logit_scale = logit_scale or self._logit_scale
+        embeddings_u, embeddings_v = split_embedding_pairs(embeddings)
         scores = (embeddings_u * embeddings_v).sum(dim=-1)
         scores = scores * logit_scale
         scores = scores[:, None] - scores[None, :]
 
         # label matrix indicating which pairs are relevant
+        labels = torch.stack(labels)
         labels = labels[:, None] < labels[None, :]
         labels = labels.float()
 
