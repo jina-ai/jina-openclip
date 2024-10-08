@@ -381,19 +381,18 @@ def train_one_epoch(
                             accum_features[key] = [val]
 
                     if mtl_losses is not None:
-                        # if we have no labels == pair training
-                        if len(mtllabels) == 0:
-                            modelouts = [model(None, b['input_ids']) for b in mtlbatch]
-                            mtlfeats = []
-                            for out in modelouts:
-                                feats = out.pop('text_features')
+                        modelouts = [model(None, b['input_ids']) for b in mtlbatch]
+                        mtlfeats = []
+                        for out in modelouts:
+                            _ = out.pop('image_features')
+                            feats = out.pop('text_features')
+                            if len(mtllabels) == 0:
                                 mtlfeats.extend(
                                     [feats[:mtl_batch_size], feats[mtl_batch_size:]]
                                 )
-                            accum_mtl_features.append(mtlfeats)
-                        # else == triplet training
-                        else:
-                            accum_mtl_labels.append(mtllabels)
+                            else:
+                                mtlfeats.append(feats)
+                                accum_mtl_labels.append(mtllabels)
 
                 accum_images.append(allimages)
                 accum_texts.append(alltexts)
