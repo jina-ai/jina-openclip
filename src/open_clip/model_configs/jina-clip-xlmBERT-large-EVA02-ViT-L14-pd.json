@@ -7,7 +7,7 @@
         "head_width": 64,
         "patch_size": 14,
         "mlp_ratio": 2.6667,
-        "patch_dropout": 0.3,
+        "patch_dropout": 0.5,
         "eva_model_name": "EVA02",
         "eva_pretrained": "L14",
         "drop_path_rate": 0.0,
