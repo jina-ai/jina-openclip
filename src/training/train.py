@@ -2,7 +2,7 @@ import json
 import math
 import time
 import warnings
-from collections import defaultdict, Counter
+from collections import defaultdict
 from itertools import islice
 from typing import Dict, List, Tuple
 
@@ -206,6 +206,12 @@ def train_one_epoch(
 
     start = time.time()
 
+    mtl_logit_scale = None
+    if args.mtl_temperature:
+        mtl_logit_scale = torch.tensor(
+            [1 / args.mtl_temperature]
+        ).to(device=device, dtype=input_dtype, non_blocking=True)
+
     # multimodal_stats = DatasetsShardsStats({})
     # image_stats = DatasetsShardsStats({})
 
@@ -303,16 +309,16 @@ def train_one_epoch(
                 left_features = torch.cat(
                     [
                         image_features[:batch_size],
-                        text_features[batch_size : batch_size + texts_batch_size,],
-                        image_features[batch_size : batch_size + images_batch_size,],
+                        text_features[batch_size: batch_size + texts_batch_size,],
+                        image_features[batch_size: batch_size + images_batch_size,],
                     ],
                     dim=0,
                 )
                 right_features = torch.cat(
                     [
                         text_features[:batch_size],
-                        text_features[batch_size + texts_batch_size :,],
-                        image_features[batch_size + images_batch_size :],
+                        text_features[batch_size + texts_batch_size:,],
+                        image_features[batch_size + images_batch_size:],
                     ],
                     dim=0,
                 )
@@ -337,6 +343,10 @@ def train_one_epoch(
                             mtlfeats.append(feats)
                     losskwargs = modelouts[0]
                     losskwargs['output_dict'] = False
+                    if mtl_logit_scale is not None:
+                        losskwargs['logit_scale'] = mtl_logit_scale
+                    logit_scale_mtl = losskwargs['logit_scale']
+
                     mtlloss = mtllossfn(*mtlfeats, *mtllabels, **losskwargs)
                     losses['mtl_loss'] = args.mtl_loss_weight * mtlloss
 
@@ -356,9 +366,9 @@ def train_one_epoch(
                     modelout['left_features'] = torch.cat(
                         [
                             image_features[:batch_size],
-                            text_features[batch_size : batch_size + texts_batch_size,],
+                            text_features[batch_size: batch_size + texts_batch_size,],
                             image_features[
-                                batch_size : batch_size + images_batch_size,
+                                batch_size: batch_size + images_batch_size,
                             ],
                         ],
                         dim=0,
@@ -366,8 +376,8 @@ def train_one_epoch(
                     modelout['right_features'] = torch.cat(
                         [
                             text_features[:batch_size],
-                            text_features[batch_size + texts_batch_size :,],
-                            image_features[batch_size + images_batch_size :],
+                            text_features[batch_size + texts_batch_size:,],
+                            image_features[batch_size + images_batch_size:],
                         ],
                         dim=0,
                     )
@@ -381,18 +391,18 @@ def train_one_epoch(
                             accum_features[key] = [val]
 
                     if mtl_losses is not None:
-                        # if we have no labels == pair training
-                        if len(mtllabels) == 0:
-                            modelouts = [model(None, b['input_ids']) for b in mtlbatch]
-                            mtlfeats = []
-                            for out in modelouts:
-                                feats = out.pop('text_features')
+                        modelouts = [model(None, b['input_ids']) for b in mtlbatch]
+                        mtlfeats = []
+                        for out in modelouts:
+                            _ = out.pop('image_features')
+                            feats = out.pop('text_features')
+                            if len(mtllabels) == 0:
                                 mtlfeats.extend(
                                     [feats[:mtl_batch_size], feats[mtl_batch_size:]]
                                 )
-                            accum_mtl_features.append(mtlfeats)
-                        # else == triplet training
-                        else:
+                                accum_mtl_features.append(mtlfeats)
+
+                        if len(mtllabels) != 0:
                             accum_mtl_labels.append(mtllabels)
 
                 accum_images.append(allimages)
@@ -446,9 +456,9 @@ def train_one_epoch(
                     modelout['left_features'] = torch.cat(
                         [
                             image_features[:batch_size],
-                            text_features[batch_size : batch_size + texts_batch_size,],
+                            text_features[batch_size: batch_size + texts_batch_size,],
                             image_features[
-                                batch_size : batch_size + images_batch_size,
+                                batch_size: batch_size + images_batch_size,
                             ],
                         ],
                         dim=0,
@@ -456,8 +466,8 @@ def train_one_epoch(
                     modelout['right_features'] = torch.cat(
                         [
                             text_features[:batch_size],
-                            text_features[batch_size + texts_batch_size :,],
-                            image_features[batch_size + images_batch_size :],
+                            text_features[batch_size + texts_batch_size:,],
+                            image_features[batch_size + images_batch_size:],
                         ],
                         dim=0,
                     )
@@ -473,7 +483,7 @@ def train_one_epoch(
                     for key, val in accum_features.items():
                         accumulated = accum_features[key]
                         inputs[key] = torch.cat(
-                            accumulated[:k] + [modelout[key]] + accumulated[k + 1 :]
+                            accumulated[:k] + [modelout[key]] + accumulated[k + 1:]
                         )
 
                     _losses = loss(**inputs, **inputs_no_accum, output_dict=True)
@@ -498,6 +508,10 @@ def train_one_epoch(
                         if 'logit_bias' in modelouts[0]:
                             inputs_no_accum['logit_bias'] = modelout.pop('logit_bias')
 
+                        if mtl_logit_scale is not None:
+                            inputs_no_accum['logit_scale'] = mtl_logit_scale
+                        logit_scale_mtl = inputs_no_accum['logit_scale']
+
                         mtlfeats = []
                         for out in modelouts:
                             _ = out.pop('image_features')
@@ -517,7 +531,7 @@ def train_one_epoch(
                                     torch.cat(
                                         _cached_feature[:k]
                                         + (mtlfeats[idx],)
-                                        + _cached_feature[k + 1 :]
+                                        + _cached_feature[k + 1:]
                                     )
                                 )
                             mtlloss = mtllossfn(
@@ -618,6 +632,12 @@ def train_one_epoch(
             logit_scale_scalar = logit_scale.item()
             temperature_scalar = 1 / logit_scale_scalar
 
+            logit_scale_mtl_scalar = 0.0
+            temperature_mtl_scalar = 0.0
+            if mtl_losses is not None:
+                logit_scale_mtl_scalar = logit_scale_mtl.item()
+                temperature_mtl_scalar = 1 / logit_scale_mtl_scalar
+
             loss_log = ' - '.join(
                 [
                     f'{loss_name.replace("_", "-")}: '
@@ -652,7 +672,9 @@ def train_one_epoch(
                 f'\tLR: first layer -> {first_layer_lr:5f} last layer -> '
                 f'{last_layer_lr:5f} - '
                 f'Logit scale: {logit_scale_scalar:.3f} '
-                f'(temperature {temperature_scalar:.3f})\n'
+                f'(temperature {temperature_scalar:.3f}) '
+                f'MTL Logit scale: {logit_scale_mtl_scalar:.3f} '
+                f'(temperature {temperature_mtl_scalar:.3f})\n'
                 f'\tLosses: {loss_log}'
             )
 
@@ -665,6 +687,8 @@ def train_one_epoch(
                 'samples-per-second-per-gpu': samples_per_second_per_gpu,
                 'logit-scale': logit_scale_scalar,
                 'temperature': temperature_scalar,
+                'logit-scale-mtl': logit_scale_mtl_scalar,
+                'temperature-mtl': temperature_mtl_scalar,
                 'first-layer-lr': first_layer_lr,
                 'last-layer-lr': last_layer_lr,
             }
