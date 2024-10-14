@@ -544,6 +544,12 @@ def parse_args(args):
         ),
     )
     parser.add_argument(
+        '--mtl-temperature',
+        default=None,
+        type=float,
+        help='MTL loss temperature parameter.',
+    )
+    parser.add_argument(
         '--mtl-loss-weight',
         type=float,
         default=1.0,
