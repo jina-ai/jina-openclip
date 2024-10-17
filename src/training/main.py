@@ -27,7 +27,7 @@ from training.factory import create_dataloaders, create_losses
 from training.optimizer import create_optimizer
 from training.params import parse_args
 from training.scheduler import create_scheduler
-from training.train import train_one_epoch
+from training.train import DatasetRecordHistory, train_one_epoch
 from training.utils import (
     copy_codebase,
     get_latest_checkpoint,
@@ -460,19 +460,13 @@ def main(args):
     )
     assert len(data), 'At least one train or eval dataset must be specified.'
 
-    # multimodal_stats = DatasetsShardsStats({})
-    # image_stats = DatasetsShardsStats({})
-    # if is_master(args) and args.resume:
-    #     _resume_multimodal_dataset_ckpt = os.path.join(
-    #         args.resume, 'multimodal-dataset.json'
-    #     )
-    #     if os.path.isfile(_resume_multimodal_dataset_ckpt):
-    #         multimodal_stats = DatasetsShardsStats.load(
-    #             _resume_multimodal_dataset_ckpt
-    #         )
-    #     _resume_image_dataset_ckpt = os.path.join(args.resume, 'image-dataset.json')
-    #     if os.path.isfile(_resume_image_dataset_ckpt):
-    #         image_stats = DatasetsShardsStats.load(_resume_image_dataset_ckpt)
+    dataset_records = None
+    if args.save_dataset_records:
+        dataset_records = DatasetRecordHistory()
+        if is_master(args) and args.resume:
+            records_ckpt = os.path.join(args.resume, 'dataset-records.bin')
+            if os.path.exists(records_ckpt):
+                dataset_records = DatasetRecordHistory.load(records_ckpt)
 
     # create scheduler if training
     scheduler = None
@@ -566,7 +560,7 @@ def main(args):
         if is_master(args):
             logger.info(f'Starting epoch {epoch}')
 
-        train_one_epoch(
+        dataset_records = train_one_epoch(
             model,
             data,
             loss,
@@ -577,6 +571,7 @@ def main(args):
             scheduler,
             distill_model,
             args,
+            dataset_records=dataset_records,
             tb_writer=writer,
         )
         _completed_epoch = epoch + 1
@@ -634,17 +629,15 @@ def main(args):
                     torch.save(_checkpoint_dict, _tmp_save_path)
                     os.replace(_tmp_save_path, _latest_save_path)
 
-            # --- SAVE DATASETS
+            # --- SAVE DATASET RECORDS
 
-            # # save multimodal dataset checkpoints
-            # _multimodal_stats.write(os.path.join(
-            #     _ckpt_dir, f'worker{args.rank}-multimodal-dataset.json',
-            # ))
-            #
-            # # save image dataset checkpoints
-            # _image_stats.write(os.path.join(
-            #     _ckpt_dir, f'worker{args.rank}-image-dataset.json',
-            # ))
+            if not is_master(args):
+                if args.log_dataset_records:
+                    dataset_records.save(
+                        os.path.join(
+                            _ckpt_dir, f'worker{args.rank}-dataset-records.bin'
+                        )
+                    )
 
             # save text dataset checkpoints
             if data['train-text'] is not None:
@@ -664,34 +657,21 @@ def main(args):
             else:
                 torch.distributed.barrier()
 
-            # if is_master(args):
-            #     # collect multimodal and image dataset checkpoints
-            #     epoch_multimodal_stats = DatasetsShardsStats({})
-            #     epoch_image_stats = DatasetsShardsStats({})
-            #     for rank in range(args.world_size):
-            #         rank_multimodal_stats = DatasetsShardsStats.load(os.path.join(
-            #             _ckpt_dir, f'worker{rank}-multimodal-dataset.json'
-            #         ))
-            #         rank_image_stats = DatasetsShardsStats.load(os.path.join(
-            #             _ckpt_dir, f'worker{rank}-image-dataset.json'
-            #         ))
-            #         epoch_multimodal_stats.update(rank_multimodal_stats)
-            #         epoch_image_stats.update(rank_image_stats)
-            #
-            #     # write full multimodal and image dataset checkpoints
-            #     epoch_multimodal_stats.write(
-            #         os.path.join(_ckpt_dir, f'epoch-multimodal-dataset.json')
-            #     )
-            #     epoch_image_stats.write(
-            #         os.path.join(_ckpt_dir, f'epoch-image-dataset.json')
-            #     )
-            #
-            #     multimodal_stats.update(epoch_multimodal_stats.data)
-            #     image_stats.update(epoch_image_stats.data)
-            #     multimodal_stats.write(
-            #         os.path.join(_ckpt_dir, f'multimodal-dataset.json')
-            #     )
-            #     image_stats.write(os.path.join(_ckpt_dir, f'image-dataset.json'))
+            if is_master(args):
+                if args.save_dataset_records:
+                    for rank in range(args.world_size):
+                        if rank != args.rank:
+                            worker_ckpt = os.path.join(
+                                _ckpt_dir, f'worker{rank}-dataset-records.bin'
+                            )
+                            rank_dataset_records = DatasetRecordHistory.load(
+                                worker_ckpt
+                            )
+                            dataset_records.merge(rank_dataset_records)
+                            os.remove(worker_ckpt)
+                    dataset_records.save(
+                        os.path.join(_ckpt_dir, f'dataset-records.bin')
+                    )
 
             # --- HOUSEKEEPING
             if is_master(args):
