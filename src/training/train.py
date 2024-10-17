@@ -1,10 +1,11 @@
-import json
 import math
 import time
 import warnings
-from collections import defaultdict
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from enum import IntEnum
 from itertools import islice
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 import torch
 from loguru import logger
@@ -82,69 +83,174 @@ class _DummyWDSDataloader:
         return None, None, None, None
 
 
-class DatasetsShardsStats:
+class DatasetType(IntEnum):
+    MULTIMODAL = 0
+    TEXT = 1
+    IMAGE = 2
+    MTL = 3
 
-    def __init__(self, data: Dict[str, Dict[str, int]]) -> None:
-        self._data = data
+
+@dataclass
+class DatasetRecord:
+    path: str
+    count: int
+    type: DatasetType
+
+
+class DatasetRecordHistory:
+
+    def __init__(self) -> None:
+        self._dataset_ids = {}
+        self._dataset_shard_ids = {}
+        self._records = {}
 
     @property
-    def data(self) -> Dict[str, Dict[str, int]]:
-        return {
-            dataset: {
-                shard: self._data[dataset][shard]
-                for shard in sorted(self._data[dataset].keys())
-            }
-            for dataset in self.datasets
-        }
+    def datasets2ids(self):
+        return self._dataset_ids
 
     @property
-    def datasets(self) -> List[str]:
-        return list(sorted(self._data.keys()))
+    def ids2datasets(self):
+        return {v: k for k, v in self._dataset_ids.items()}
 
-    @property
-    def sums(self) -> Dict[str, int]:
-        return {
-            dataset: sum(self._data[dataset].values())
-            for dataset in self.datasets
-        }
+    def shards2ids(self, dataset_id: int):
+        return self._dataset_shard_ids[dataset_id]
 
-    def add(self, dataset: str, shard: str, freq: int) -> None:
-        if dataset in self._data:
-            if shard in self._data[dataset]:
-                self._data[dataset][shard] += freq
-            else:
-                self._data[dataset][shard] = freq
-        else:
-            self._data[dataset] = {shard: freq}
+    def ids2shards(self, dataset_id: int):
+        return {v: k for k, v in self._dataset_shard_ids[dataset_id].items()}
 
-    def update(self, new: Dict[str, Dict[str, int]]):
-        for dataset, shards in new.items():
-            for shard, freq in shards.items():
-                self.add(dataset, shard, freq)
+    def merge(self, other: 'DatasetRecordHistory'):
+        for step, records in other._records.items():
+            _new_records = []
+            for did, sid, count, _type in records:
+                dataset = other.ids2datasets[did]
+                shard = other.ids2shards(did)[sid]
+                _new_did = self.dataset_addget(dataset)
+                _new_sid = self.dataset_shard_addget(shard, _new_did)
+                _new_records.append((_new_did, _new_sid, count, _type))
+            if step not in self._records:
+                self._records[step] = []
+            self._records[step].extend(_new_records)
+
+    def dataset_addget(self, name: str) -> int:
+        if name in self._dataset_ids:
+            return self._dataset_ids[name]
+        _new_id = len(self._dataset_ids)
+        self._dataset_ids[name] = _new_id
+        return _new_id
+
+    def dataset_shard_addget(self, name: str, dataset_id: int) -> int:
+        if dataset_id not in self._dataset_shard_ids:
+            self._dataset_shard_ids[dataset_id] = {}
+
+        _shard_ids = self._dataset_shard_ids[dataset_id]
+        if name in _shard_ids:
+            return _shard_ids[name]
+        _new_id = len(_shard_ids)
+        self._dataset_shard_ids[dataset_id][name] = _new_id
+        return _new_id
+
+    def add_records(self, records: List[DatasetRecord], step: int) -> None:
+        if step not in self._records:
+            self._records[step] = []
+
+        for record in records:
+            dataset, shard = self.get_dataset_and_shard_from_path(record.path)
+            _dataset_id = self.dataset_addget(dataset)
+            _shard_id = self.dataset_shard_addget(shard, _dataset_id)
+            self._records[step].append(
+                (_dataset_id, _shard_id, record.count, record.type.value)
+            )
 
     @staticmethod
-    def get_dataset_and_shard_from_url(url: str) -> Tuple[str, str]:
-        if url.startswith('pipe:aws s3 cp s3://') and url.endswith('.tar -'):
-            url = url.replace('pipe:aws s3 cp s3://', '')
-            url = url.replace(' -', '')
-        url = url.replace('/data/commonpool/webdataset/', '')
-        url = url.replace('jina-clip-commonpool/multilingual-webdataset/', '')
-        url = url.replace('/home/jinaai/datasets/visualqa/', '')
-        url = url.replace('/home/jinaai/datasets/', '')
-        url = url.replace('/data/commonpool/', '')
-        dataset = '/'.join(url.split('/')[:-1])
-        shard = url.split('/')[-1]
+    def get_dataset_and_shard_from_path(path: str) -> Tuple[str, str]:
+        if path.startswith('pipe:aws s3 cp s3://') and path.endswith('.tar -'):
+            path = path.replace('pipe:aws s3 cp s3://', '')
+            path = path.replace(' -', '')
+        shard = path.split('/')[-1]
+        if shard.startswith('shard'):
+            dataset = '/'.join(path.split('/')[:-1])
+            return dataset, shard
 
-        return dataset, shard
+        return path, 'unknown'
 
-    def write(self, fname: str):
-        with open(fname, 'w') as f:
-            json.dump(self.data, f)
+    @property
+    def state_dict(self):
+        return {
+            'dataset_ids': self._dataset_ids,
+            'dataset_shard_ids': self._dataset_shard_ids,
+            'records': self._records,
+        }
+
+    def report(self, start: int = 0, end: int = -1):
+        _last_step = max(list(self._records.keys()))
+        end = end if end > 0 else _last_step
+        steps = [step for step in self._records.keys() if start <= step <= end]
+        stats = {
+            e.name: {
+                'datasets': {
+                    dataset: {
+                        'shards': {
+                            shard: {
+                                'count': 0,
+                                'percentage': 0.0,
+                            }
+                            for shard in self._dataset_shard_ids[dataset_id].keys()
+                        },
+                        'count': 0,
+                        'percentage': 0.0,
+                    }
+                    for dataset, dataset_id in self._dataset_ids.items()
+                },
+                'count': 0,
+                'percentage': 0.0
+            }
+            for e in DatasetType
+        }
+        total = 0
+        for step in steps:
+            for _dataset_id, _shard_id, count, _type_value in self._records[step]:
+                _type = DatasetType(_type_value).name
+                _dataset = self.ids2datasets[_dataset_id]
+                _shard = self.ids2shards(_dataset_id)[_shard_id]
+                total += count
+                stats[_type]['count'] += count
+                stats[_type]['datasets'][_dataset]['count'] += count
+                stats[_type]['datasets'][_dataset]['shards'][_shard]['count'] += count
+
+        for e in DatasetType:
+            total_per_type = stats[e.name]['count']
+            stats[e.name]['percentage'] = total_per_type / total if total else 0.0
+            for dataset in stats[e.name]['datasets']:
+                total_per_dataset = stats[e.name]['datasets'][dataset]['count']
+                stats[e.name]['datasets'][dataset]['percentage'] = (
+                    total_per_dataset / total_per_type
+                ) if total_per_type else 0.0
+                for shard in stats[e.name]['datasets'][dataset]['shards']:
+                    total_per_shard = (
+                        stats[e.name]['datasets'][dataset]['shards'][shard]['count']
+                    )
+                    (
+                        stats[e.name]['datasets'][dataset]['shards'][shard][
+                            'percentage'
+                        ]
+                    ) = (
+                        total_per_shard / total_per_dataset
+                        if total_per_dataset else 0.0
+                    )
+
+        return stats
+
+    def save(self, f):
+        torch.save(self.state_dict, f)
 
     @classmethod
-    def load(cls, fname: str):
-        with open(fname, 'r') as f:
-            return cls(json.load(f))
+    def load(cls, f):
+        sd = torch.load(f)
+        obj = cls()
+        obj._dataset_ids = sd['dataset_ids']
+        obj._dataset_shard_ids = sd['dataset_shard_ids']
+        obj._records = sd['records']
+        return obj
 
 
 def train_one_epoch(
@@ -158,6 +264,7 @@ def train_one_epoch(
     scheduler,
     distill_model,
     args,
+    dataset_records: DatasetRecordHistory,
     tb_writer=None,
 ):
     device = torch.device(args.device)
@@ -212,13 +319,12 @@ def train_one_epoch(
             [1 / args.mtl_temperature]
         ).to(device=device, dtype=input_dtype, non_blocking=True)
 
-    # multimodal_stats = DatasetsShardsStats({})
-    # image_stats = DatasetsShardsStats({})
+    _dataset_records = []
 
     # training loop
     for i, (
         (_, urls, images, texts),
-        (_, (text_pairs, _)),
+        (textdataset, (text_pairs, _)),
         (_, image_urls, images_left, images_right),
         (mtldataset, (mtlbatch, mtllabels)),
     ) in enumerate(
@@ -229,14 +335,6 @@ def train_one_epoch(
             islice(train_mtl_dataloader, 1, None),
         )
     ):
-
-        # for url, freq in Counter(urls).most_common():
-        #     d, s = DatasetsShardsStats.get_dataset_and_shard_from_url(url)
-        #     multimodal_stats.add(dataset=d, shard=s, freq=freq)
-        #
-        # for url, freq in Counter(image_urls).most_common():
-        #     d, s = DatasetsShardsStats.get_dataset_and_shard_from_url(url)
-        #     image_stats.add(dataset=d, shard=s, freq=freq)
 
         i_accum = i // args.accum_freq
         step = _num_batches_per_epoch * epoch + i_accum
@@ -274,6 +372,28 @@ def train_one_epoch(
 
         allimages = torch.cat(allimages, dim=0)
         alltexts = torch.cat(alltexts, dim=0)
+
+        for url, freq in Counter(urls).most_common():
+            _dataset_records.append(
+                DatasetRecord(path=url, count=freq, type=DatasetType.MULTIMODAL)
+            )
+        if textdataset is not None:
+            _dataset_records.append(
+                DatasetRecord(
+                    path=textdataset, count=texts_batch_size, type=DatasetType.TEXT
+                )
+            )
+        if image_urls is not None:
+            for url, freq in Counter(image_urls).most_common():
+                _dataset_records.append(
+                    DatasetRecord(path=url, count=freq, type=DatasetType.IMAGE)
+                )
+        if mtldataset is not None:
+            _dataset_records.append(
+                DatasetRecord(
+                    path=mtldataset, count=mtl_batch_size, type=DatasetType.MTL
+                )
+            )
 
         _data_time_m.update(time.time() - start)
 
@@ -599,6 +719,9 @@ def train_one_epoch(
         with torch.no_grad():
             unwrap_model(model).logit_scale.clamp_(0, math.log(100))
 
+        dataset_records.add_records(records=_dataset_records, step=i_accum)
+        _dataset_records = []
+
         _batch_time_m.update(time.time() - start)
         start = time.time()
         batch_count = i_accum + 1
@@ -647,13 +770,13 @@ def train_one_epoch(
             )
             samples_per_second = (
                 args.accum_freq
-                * (batch_size + +texts_batch_size + images_batch_size + mtl_batch_size)
+                * (batch_size + texts_batch_size + images_batch_size + mtl_batch_size)
                 * args.world_size
                 / _batch_time_m.val
             )
             samples_per_second_per_gpu = (
                 args.accum_freq
-                * (batch_size + +texts_batch_size + images_batch_size + mtl_batch_size)
+                * (batch_size + texts_batch_size + images_batch_size + mtl_batch_size)
                 / _batch_time_m.val
             )
             last_layer_lr = optimizer.param_groups[-1]['lr']
@@ -703,11 +826,10 @@ def train_one_epoch(
 
             if args.wandb:
                 assert wandb is not None, 'Please install wandb'
-                logdata['step'] = step  # for backwards compatibility
                 wandb.log(logdata, step=step)
 
             # resetting batch / data time meters per log window
             _batch_time_m.reset()
             _data_time_m.reset()
 
-    # return multimodal_stats, image_stats
+    return dataset_records
