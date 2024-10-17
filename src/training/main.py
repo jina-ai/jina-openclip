@@ -460,11 +460,13 @@ def main(args):
     )
     assert len(data), 'At least one train or eval dataset must be specified.'
 
-    dataset_records = DatasetRecordHistory()
-    if is_master(args) and args.resume:
-        records_ckpt = os.path.join(args.resume, 'dataset-records.bin')
-        if os.path.exists(records_ckpt):
-            dataset_records = DatasetRecordHistory.load(records_ckpt)
+    dataset_records = None
+    if args.save_dataset_records:
+        dataset_records = DatasetRecordHistory()
+        if is_master(args) and args.resume:
+            records_ckpt = os.path.join(args.resume, 'dataset-records.bin')
+            if os.path.exists(records_ckpt):
+                dataset_records = DatasetRecordHistory.load(records_ckpt)
 
     # create scheduler if training
     scheduler = None
@@ -630,9 +632,12 @@ def main(args):
             # --- SAVE DATASET RECORDS
 
             if not is_master(args):
-                dataset_records.save(
-                    os.path.join(_ckpt_dir, f'worker{args.rank}-dataset-records.bin')
-                )
+                if args.log_dataset_records:
+                    dataset_records.save(
+                        os.path.join(
+                            _ckpt_dir, f'worker{args.rank}-dataset-records.bin'
+                        )
+                    )
 
             # save text dataset checkpoints
             if data['train-text'] is not None:
@@ -653,16 +658,20 @@ def main(args):
                 torch.distributed.barrier()
 
             if is_master(args):
-                for rank in range(args.world_size):
-                    if rank != args.rank:
-                        worker_ckpt = os.path.join(
-                            _ckpt_dir, f'worker{rank}-dataset-records.bin'
-                        )
-                        rank_dataset_records = DatasetRecordHistory.load(worker_ckpt)
-                        dataset_records.merge(rank_dataset_records)
-                        os.remove(worker_ckpt)
-
-                dataset_records.save(os.path.join(_ckpt_dir, f'dataset-records.bin'))
+                if args.save_dataset_records:
+                    for rank in range(args.world_size):
+                        if rank != args.rank:
+                            worker_ckpt = os.path.join(
+                                _ckpt_dir, f'worker{rank}-dataset-records.bin'
+                            )
+                            rank_dataset_records = DatasetRecordHistory.load(
+                                worker_ckpt
+                            )
+                            dataset_records.merge(rank_dataset_records)
+                            os.remove(worker_ckpt)
+                    dataset_records.save(
+                        os.path.join(_ckpt_dir, f'dataset-records.bin')
+                    )
 
             # --- HOUSEKEEPING
             if is_master(args):

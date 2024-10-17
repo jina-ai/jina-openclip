@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from enum import IntEnum
 from itertools import islice
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 from loguru import logger
@@ -264,7 +264,7 @@ def train_one_epoch(
     scheduler,
     distill_model,
     args,
-    dataset_records: DatasetRecordHistory,
+    dataset_records: Optional[DatasetRecordHistory] = None,
     tb_writer=None,
 ):
     device = torch.device(args.device)
@@ -373,27 +373,28 @@ def train_one_epoch(
         allimages = torch.cat(allimages, dim=0)
         alltexts = torch.cat(alltexts, dim=0)
 
-        for url, freq in Counter(urls).most_common():
-            _dataset_records.append(
-                DatasetRecord(path=url, count=freq, type=DatasetType.MULTIMODAL)
-            )
-        if textdataset is not None:
-            _dataset_records.append(
-                DatasetRecord(
-                    path=textdataset, count=texts_batch_size, type=DatasetType.TEXT
-                )
-            )
-        if image_urls is not None:
-            for url, freq in Counter(image_urls).most_common():
+        if dataset_records is not None:
+            for url, freq in Counter(urls).most_common():
                 _dataset_records.append(
-                    DatasetRecord(path=url, count=freq, type=DatasetType.IMAGE)
+                    DatasetRecord(path=url, count=freq, type=DatasetType.MULTIMODAL)
                 )
-        if mtldataset is not None:
-            _dataset_records.append(
-                DatasetRecord(
-                    path=mtldataset, count=mtl_batch_size, type=DatasetType.MTL
+            if textdataset is not None:
+                _dataset_records.append(
+                    DatasetRecord(
+                        path=textdataset, count=texts_batch_size, type=DatasetType.TEXT
+                    )
                 )
-            )
+            if image_urls is not None:
+                for url, freq in Counter(image_urls).most_common():
+                    _dataset_records.append(
+                        DatasetRecord(path=url, count=freq, type=DatasetType.IMAGE)
+                    )
+            if mtldataset is not None:
+                _dataset_records.append(
+                    DatasetRecord(
+                        path=mtldataset, count=mtl_batch_size, type=DatasetType.MTL
+                    )
+                )
 
         _data_time_m.update(time.time() - start)
 
@@ -719,8 +720,9 @@ def train_one_epoch(
         with torch.no_grad():
             unwrap_model(model).logit_scale.clamp_(0, math.log(100))
 
-        dataset_records.add_records(records=_dataset_records, step=i_accum)
-        _dataset_records = []
+        if dataset_records is not None:
+            dataset_records.add_records(records=_dataset_records, step=i_accum)
+            _dataset_records = []
 
         _batch_time_m.update(time.time() - start)
         start = time.time()

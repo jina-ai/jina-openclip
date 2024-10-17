@@ -652,6 +652,12 @@ def parse_args(args):
         help='Always save the most recent model trained to epoch-latest.pt.',
     )
     parser.add_argument(
+        '--save-dataset-records',
+        action='store_true',
+        default=False,
+        help='Save the dataset access records.',
+    )
+    parser.add_argument(
         '--delete-previous-checkpoint',
         default=False,
         action='store_true',
