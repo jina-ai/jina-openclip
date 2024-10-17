@@ -632,7 +632,7 @@ def main(args):
             # --- SAVE DATASET RECORDS
 
             if not is_master(args):
-                if args.log_dataset_records:
+                if args.save_dataset_records:
                     dataset_records.save(
                         os.path.join(
                             _ckpt_dir, f'worker{args.rank}-dataset-records.bin'
