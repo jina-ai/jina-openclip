@@ -461,9 +461,9 @@ def main(args):
     assert len(data), 'At least one train or eval dataset must be specified.'
 
     dataset_records = None
-    if args.save_dataset_records:
+    if args.save_dataset_records and is_master(args):
         dataset_records = DatasetRecordHistory()
-        if is_master(args) and args.resume:
+        if args.resume:
             records_ckpt = os.path.join(args.resume, 'dataset-records.bin')
             if os.path.exists(records_ckpt):
                 dataset_records = DatasetRecordHistory.load(records_ckpt)
@@ -559,6 +559,9 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):
             logger.info(f'Starting epoch {epoch}')
+
+        if args.save_dataset_records and not is_master(args):
+            dataset_records = DatasetRecordHistory()
 
         dataset_records = train_one_epoch(
             model,

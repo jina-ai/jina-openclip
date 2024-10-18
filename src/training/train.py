@@ -2,6 +2,8 @@ import math
 import time
 import warnings
 from collections import Counter, defaultdict
+
+import yaml
 from dataclasses import dataclass
 from enum import IntEnum
 from itertools import islice
@@ -167,7 +169,7 @@ class DatasetRecordHistory:
             path = path.replace('pipe:aws s3 cp s3://', '')
             path = path.replace(' -', '')
         shard = path.split('/')[-1]
-        if shard.startswith('shard'):
+        if shard.startswith('shard') or shard.endswith('.tar'):
             dataset = '/'.join(path.split('/')[:-1])
             return dataset, shard
 
@@ -181,7 +183,7 @@ class DatasetRecordHistory:
             'records': self._records,
         }
 
-    def report(self, start: int = 0, end: int = -1):
+    def report(self, start: int = 0, end: int = -1, report_shards: bool = False):
         _last_step = max(list(self._records.keys()))
         end = end if end > 0 else _last_step
         steps = [step for step in self._records.keys() if start <= step <= end]
@@ -237,8 +239,37 @@ class DatasetRecordHistory:
                         total_per_shard / total_per_dataset
                         if total_per_dataset else 0.0
                     )
-
+                if not report_shards:
+                    _ = stats[e.name]['datasets'][dataset].pop('shards')
+                else:
+                    stats[e.name]['datasets'][dataset]['shards'] = {
+                        k: v for k, v in sorted(
+                            stats[e.name]['datasets'][dataset]['shards'].items(),
+                            key=lambda x: x[1]['count'],
+                            reverse=True
+                        ) if v['count'] > 0
+                    }
+            stats[e.name]['datasets'] = {
+                k: v for k, v in sorted(
+                    stats[e.name]['datasets'].items(),
+                    key=lambda x: x[1]['count'],
+                    reverse=True
+                ) if v['count'] > 0
+            }
+        stats = {
+            k: v for k, v in sorted(
+                stats.items(), key=lambda x: x[1]['count'], reverse=True
+            ) if v['count'] > 0
+        }
         return stats
+
+    def yaml_report(
+        self, fname: str, start: int = 0, end: int = -1, report_shards: bool = False
+    ):
+        with open(fname, 'w') as f:
+            yaml.safe_dump(
+                self.report(start, end, report_shards), f, sort_keys=False,
+            )
 
     def save(self, f):
         torch.save(self.state_dict, f)
@@ -721,7 +752,7 @@ def train_one_epoch(
             unwrap_model(model).logit_scale.clamp_(0, math.log(100))
 
         if dataset_records is not None:
-            dataset_records.add_records(records=_dataset_records, step=i_accum)
+            dataset_records.add_records(records=_dataset_records, step=step)
             _dataset_records = []
 
         _batch_time_m.update(time.time() - start)
