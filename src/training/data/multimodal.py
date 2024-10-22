@@ -56,7 +56,7 @@ def expand_urls(urls, weights=None, normalize_after_expansion: bool = False):
         for url, weight in zip(urllist, weights):
             expanded_url = list(braceexpand.braceexpand(url))
             normweight = (
-                weight / sum(expanded_url) if normalize_after_expansion else weight
+                weight / len(expanded_url) if normalize_after_expansion else weight
             )
             expanded_weights = [normweight for _ in expanded_url]
             all_urls.extend(expanded_url)
