@@ -520,6 +520,7 @@ def train_one_epoch(
                         _ = modelout.pop('logit_scale')
                         modelout['logit_scale'] = mtl_logit_scale
                     logit_scale_mtl = modelout['logit_scale']
+                    modelout['output_dict'] = False
 
                     mtlloss = mtllossfn(*mtl_features, *mtllabels, **modelout)
                     losses['mtl_loss'] = args.mtl_loss_weight * mtlloss
