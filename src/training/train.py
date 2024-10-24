@@ -1,4 +1,6 @@
 import math
+import os
+import shutil
 import time
 import warnings
 from collections import Counter, defaultdict
@@ -19,6 +21,7 @@ except ImportError:
 
 from open_clip import get_input_dtype
 from training.distributed import is_master
+from training.eval import evaluate
 from training.utils import get_autocast
 
 
@@ -287,6 +290,8 @@ class DatasetRecordHistory:
 def train_one_epoch(
     model,
     data,
+    preprocess_val,
+    tokenizer,
     loss,
     mtl_losses,
     epoch,
@@ -351,6 +356,7 @@ def train_one_epoch(
         ).to(device=device, dtype=input_dtype, non_blocking=True)
 
     _dataset_records = []
+    _completed_epoch = 0
 
     # training loop
     for i, (
@@ -874,5 +880,124 @@ def train_one_epoch(
             # resetting batch / data time meters per log window
             _batch_time_m.reset()
             _data_time_m.reset()
+
+        if (step + 1) % 1000 == 0:
+            _completed_epoch += 1
+            if args.save_logs:
+
+                # --- CREATE CHECKPOINT DIRECTORY
+                _ckpt_dir = os.path.join(
+                    args.checkpoint_path, f'epoch-{_completed_epoch}'
+                )
+                if is_master(args):
+                    os.makedirs(_ckpt_dir, exist_ok=False)
+
+                # wait for all ranks
+                torch.distributed.barrier()
+
+                # --- SAVE MODEL
+                if args.deepspeed:
+                    _ds_checkpoint_path = os.path.join(
+                        args.logs, args.name, 'checkpoints'
+                    )
+                    if _completed_epoch == args.epochs or (
+                        args.save_frequency > 0
+                        and (_completed_epoch % args.save_frequency) == 0
+                    ):
+                        client_state = {'epoch': _completed_epoch}
+                        model.save_checkpoint(
+                            save_dir=_ds_checkpoint_path,
+                            tag=f'epoch-{str(_completed_epoch)}',
+                            client_state=client_state,
+                        )
+                elif is_master(args):
+                    _checkpoint_dict = {
+                        'epoch': _completed_epoch,
+                        'name': args.name,
+                        'state_dict': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                    }
+                    if scaler is not None:
+                        _checkpoint_dict['scaler'] = scaler.state_dict()
+
+                    if _completed_epoch == args.epochs or (
+                        args.save_frequency > 0
+                        and (_completed_epoch % args.save_frequency) == 0
+                    ):
+                        _model_ckpt_path = os.path.join(_ckpt_dir, 'state.pt')
+                        torch.save(_checkpoint_dict, _model_ckpt_path)
+
+                    if args.save_most_recent:
+                        # try not to corrupt the latest checkpoint if save fails
+                        _tmp_save_path = os.path.join(args.checkpoint_path, 'tmp.pt')
+                        _latest_save_path = os.path.join(
+                            args.checkpoint_path, 'epoch-latest.pt'
+                        )
+                        torch.save(_checkpoint_dict, _tmp_save_path)
+                        os.replace(_tmp_save_path, _latest_save_path)
+
+                # --- SAVE DATASET RECORDS
+
+                if not is_master(args):
+                    if args.save_dataset_records:
+                        dataset_records.save(
+                            os.path.join(
+                                _ckpt_dir, f'worker{args.rank}-dataset-records.bin'
+                            )
+                        )
+                        dataset_records = DatasetRecordHistory()
+
+                # save text dataset checkpoints
+                if data['train-text'] is not None:
+                    data['train-text'][0].write_to_json(os.path.join(
+                        _ckpt_dir, f'worker{args.rank}-s3-dataset.json',
+                    ))
+
+                # save MTL dataset checkpoints
+                if data['train-mtl'] is not None:
+                    data['train-mtl'][0].write_to_json(os.path.join(
+                        _ckpt_dir, f'worker{args.rank}-mtl-dataset.json',
+                    ))
+
+                # wait for all ranks again
+                torch.distributed.barrier()
+
+                if is_master(args):
+                    if args.save_dataset_records:
+                        for rank in range(args.world_size):
+                            if rank != args.rank:
+                                worker_ckpt = os.path.join(
+                                    _ckpt_dir, f'worker{rank}-dataset-records.bin'
+                                )
+                                rank_dataset_records = DatasetRecordHistory.load(
+                                    worker_ckpt
+                                )
+                                dataset_records.merge(rank_dataset_records)
+                                os.remove(worker_ckpt)
+                        dataset_records.save(
+                            os.path.join(_ckpt_dir, f'dataset-records.bin')
+                        )
+
+                # --- HOUSEKEEPING
+                if is_master(args):
+                    if args.delete_previous_checkpoint:
+                        _previous_checkpoint = os.path.join(
+                            args.checkpoint_path, f'epoch-{_completed_epoch - 1}'
+                        )
+                        if os.path.exists(_previous_checkpoint):
+                            shutil.rmtree(_previous_checkpoint)
+
+            if is_master(args):
+                evaluate(
+                    model,
+                    preprocess_val,
+                    tokenizer,
+                    data,
+                    _completed_epoch,
+                    args,
+                    step,
+                    tb_writer=tb_writer,
+                )
+            model.train()
 
     return dataset_records
