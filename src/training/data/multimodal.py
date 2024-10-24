@@ -40,7 +40,7 @@ _IMAGE_EXTENSIONS = IMAGE_EXTENSIONS + ['image']
 _TEXT_EXTENSIONS = ['txt', 'text', 'caption']
 
 
-def expand_urls(urls, weights=None):
+def expand_urls(urls, weights=None, normalize_after_expansion: bool = False):
     if weights is None:
         expanded_urls = wds.shardlists.expand_urls(urls)
         return expanded_urls, None
@@ -55,7 +55,10 @@ def expand_urls(urls, weights=None):
         all_urls, all_weights = [], []
         for url, weight in zip(urllist, weights):
             expanded_url = list(braceexpand.braceexpand(url))
-            expanded_weights = [weight for _ in expanded_url]
+            normweight = (
+                weight / len(expanded_url) if normalize_after_expansion else weight
+            )
+            expanded_weights = [normweight for _ in expanded_url]
             all_urls.extend(expanded_url)
             all_weights.extend(expanded_weights)
         return all_urls, all_weights
@@ -81,30 +84,20 @@ def get_dataset_size(shards):
     return total_size, num_shards
 
 
-def count_samples(dataloader):
-    os.environ['WDS_EPOCH'] = '0'
-    n_elements, n_batches = 0, 0
-    for images, texts in dataloader:
-        n_batches += 1
-        n_elements += len(images)
-        assert len(images) == len(texts)
-    return n_elements, n_batches
-
-
-def filter_no_caption(sample: Dict[str, Any]):
+def filter_no_caption(sample: Dict[str, Any]) -> bool:
     return any([ext in sample for ext in _TEXT_EXTENSIONS])
 
 
-def filter_no_image(sample: Dict[str, Any]):
+def filter_no_image(sample: Dict[str, Any]) -> bool:
     return any([ext in sample for ext in _IMAGE_EXTENSIONS])
 
 
-def filter_no_caption_or_no_image(sample: Dict[str, Any]):
+def filter_no_caption_or_no_image(sample: Dict[str, Any]) -> bool:
     return filter_no_caption(sample) and filter_no_image(sample)
 
 
-def log_and_continue(exn):
-    logger.warning(f'Handling webdataset error ({repr(exn)}). Ignoring')
+def log_and_continue(exn) -> bool:
+    logger.warning(f'Caught webdataset error ({repr(exn)}), ignoring')
     return True
 
 
@@ -192,7 +185,7 @@ class DataInfo:
             self.sampler.set_epoch(epoch)
 
 
-class _DETShuffle(wds.PipelineStage):
+class _DeterministicShuffle(wds.PipelineStage):
     def __init__(
         self,
         bufsize: int = 1000,
@@ -227,7 +220,7 @@ class _DETShuffle(wds.PipelineStage):
         return _shuffle(src, self.bufsize, self.initial, rng)
 
 
-class _ResampledShards(IterableDataset):
+class _ResampleShards(IterableDataset):
     def __init__(
         self,
         urls: str,
@@ -236,9 +229,12 @@ class _ResampledShards(IterableDataset):
         worker_seed: Optional[Callable] = None,
         deterministic: bool = False,
         epoch: Union[int, _SharedEpoch] = -1,
+        normalize_after_expansion: bool = False,
     ):
         super().__init__()
-        urls, weights = expand_urls(urls, weights)
+        urls, weights = expand_urls(
+            urls, weights, normalize_after_expansion=normalize_after_expansion
+        )
         self.urls = urls
         self.weights = weights
         if self.weights is not None:
@@ -330,11 +326,13 @@ class _SyntheticDataset(Dataset):
         return image, self.preprocess_txt(self.caption)
 
 
-def _custom_webdataset_sampling_stage(data, use_long_captions: bool = False):
+def _custom_webdataset_sampling_stage(data, yield_all_captions: bool = False):
     for sample in data:
         captions = {'unk': sample['text']}
-        if 'json' in sample:
-            if use_long_captions and 'long_captions' in sample['json']:
+        if yield_all_captions and 'json' in sample:
+            if 'long_captions' in sample['json']:
+                captions = sample['json']['long_captions']
+            if 'long-captions' in sample['json']:
                 captions = sample['json']['long_captions']
             elif 'captions' in sample['json']:
                 captions = sample['json']['captions']
@@ -430,8 +428,9 @@ def get_wds_dataset(
     is_train: bool = False,
     tokenizer: Any = None,
     upsampling_factors: Optional[str] = None,
+    normalize_upsampling_factors_per_nshards: bool = False,
     images_pairs: bool = False,
-    use_long_captions: bool = False,
+    yield_all_captions: bool = False,
     workers: int = 1,
     batch_size: int = 32,
     seed: int = 0,
@@ -467,18 +466,19 @@ def get_wds_dataset(
     if is_train:
         if resampled:
             _shard_pipeline = [
-                _ResampledShards(
+                _ResampleShards(
                     shards,
                     weights=upsampling_factors,
                     deterministic=True,
                     epoch=shared_epoch,
+                    normalize_after_expansion=normalize_upsampling_factors_per_nshards,
                 ),
                 tarfile_to_samples_nothrow,
             ]
         else:
             _shard_pipeline = [
                 wds.SimpleShardList(shards),
-                _DETShuffle(
+                _DeterministicShuffle(
                     bufsize=_SHARD_SHUFFLE_SIZE,
                     initial=_SHARD_SHUFFLE_INITIAL,
                     seed=seed,
@@ -521,7 +521,7 @@ def get_wds_dataset(
                 text=';'.join(_TEXT_EXTENSIONS),
             ),
             wds.pipelinefilter(_custom_webdataset_sampling_stage)(
-                use_long_captions=use_long_captions
+                yield_all_captions=yield_all_captions
             ),
             wds.map_dict(image=preprocess_fn, text=lambda text: tokenizer(text)[0]),
             wds.to_tuple('__key__', '__url__', 'image', 'text'),

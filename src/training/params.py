@@ -70,6 +70,17 @@ def parse_args(args):
         ),
     )
     parser.add_argument(
+        '--train-data-yield-all-captions',
+        default=False,
+        action='store_true',
+        help=(
+            'Sometimes samples come with multiple captions per image. If this option '
+            'is enabled, the dataloader will look for the `captions`, `long-captions` '
+            'and `gpt4v-captions` fields inside the metadata of each sample and will '
+            'yield all their contents.'
+        ),
+    )
+    parser.add_argument(
         '--train-txtdata',
         type=str,
         default=None,
@@ -170,6 +181,15 @@ def parse_args(args):
         default=False,
         action='store_true',
         help='Whether to use sampling with replacement for webdataset shard selection.',
+    )
+    parser.add_argument(
+        '--normalize-upsampling-factors-per-nshards',
+        default=False,
+        action='store_true',
+        help=(
+            'If a dataset consists of multiple shards, enable this option to '
+            'distribute the dataset\'s upsampling factor across all shards.'
+        ),
     )
     parser.add_argument(
         '--s3-max-shards',
