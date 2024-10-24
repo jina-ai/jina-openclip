@@ -326,11 +326,13 @@ class _SyntheticDataset(Dataset):
         return image, self.preprocess_txt(self.caption)
 
 
-def _custom_webdataset_sampling_stage(data, use_long_captions: bool = False):
+def _custom_webdataset_sampling_stage(data, yield_all_captions: bool = False):
     for sample in data:
         captions = {'unk': sample['text']}
-        if 'json' in sample:
-            if use_long_captions and 'long_captions' in sample['json']:
+        if yield_all_captions and 'json' in sample:
+            if 'long_captions' in sample['json']:
+                captions = sample['json']['long_captions']
+            if 'long-captions' in sample['json']:
                 captions = sample['json']['long_captions']
             elif 'captions' in sample['json']:
                 captions = sample['json']['captions']
@@ -426,8 +428,9 @@ def get_wds_dataset(
     is_train: bool = False,
     tokenizer: Any = None,
     upsampling_factors: Optional[str] = None,
+    normalize_upsampling_factors_per_nshards: bool = False,
     images_pairs: bool = False,
-    use_long_captions: bool = False,
+    yield_all_captions: bool = False,
     workers: int = 1,
     batch_size: int = 32,
     seed: int = 0,
@@ -468,7 +471,7 @@ def get_wds_dataset(
                     weights=upsampling_factors,
                     deterministic=True,
                     epoch=shared_epoch,
-                    normalize_after_expansion=True,
+                    normalize_after_expansion=normalize_upsampling_factors_per_nshards,
                 ),
                 tarfile_to_samples_nothrow,
             ]
@@ -518,7 +521,7 @@ def get_wds_dataset(
                 text=';'.join(_TEXT_EXTENSIONS),
             ),
             wds.pipelinefilter(_custom_webdataset_sampling_stage)(
-                use_long_captions=use_long_captions
+                yield_all_captions=yield_all_captions
             ),
             wds.map_dict(image=preprocess_fn, text=lambda text: tokenizer(text)[0]),
             wds.to_tuple('__key__', '__url__', 'image', 'text'),

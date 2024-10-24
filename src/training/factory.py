@@ -177,13 +177,16 @@ def _create_multimodal_dataloader(
             is_train=True,
             tokenizer=tokenizer,
             upsampling_factors=args.train_data_upsampling_factors,
-            use_long_captions=False,
+            yield_all_captions=args.train_data_yield_all_captions,
             workers=args.workers,
             batch_size=batch_size,
             seed=args.seed,
             epoch=epoch,
             dataset_resampled=args.dataset_resampled,
             world_size=args.world_size,
+            normalize_upsampling_factors_per_nshards=(
+                args.normalize_upsampling_factors_per_nshards
+            ),
         )
     elif _train_dataset_type == 'csv':
         data['train'] = get_csv_dataset(
@@ -297,6 +300,9 @@ def _create_images_dataloader(
         epoch=epoch,
         dataset_resampled=args.dataset_resampled,
         world_size=args.world_size,
+        normalize_upsampling_factors_per_nshards=(
+            args.normalize_upsampling_factors_per_nshards
+        ),
     )
 
 
