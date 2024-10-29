@@ -535,10 +535,22 @@ def parse_args(args):
         help='InfoNCE temperature parameter.',
     )
     parser.add_argument(
+        '--mtl-temperature',
+        default=None,
+        type=float,
+        help='MTL loss temperature parameter.',
+    )
+    parser.add_argument(
         '--freeze-temperature',
         default=False,
         action='store_true',
-        help='Keep the temperature parameter constant during training.',
+        help='Keep the temperature parameter fixed during training.',
+    )
+    parser.add_argument(
+        '--freeze-mtl-temperature',
+        default=False,
+        action='store_true',
+        help='Keep the MTL temperature parameter fixed during training.',
     )
     parser.add_argument(
         '--local-loss',
@@ -562,12 +574,6 @@ def parse_args(args):
         help=(
             'Comma separated or JSON list of loss functions to use for MTL ' 'training.'
         ),
-    )
-    parser.add_argument(
-        '--mtl-temperature',
-        default=None,
-        type=float,
-        help='MTL loss temperature parameter.',
     )
     parser.add_argument(
         '--mtl-loss-weight',

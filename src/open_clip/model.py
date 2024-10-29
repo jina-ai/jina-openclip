@@ -678,6 +678,8 @@ class CustomTextCLIP(nn.Module):
         init_logit_scale: float = np.log(1 / 0.07),
         init_logit_bias: Optional[float] = None,
         freeze_logit_scale: bool = False,
+        init_mtl_logit_scale: float = np.log(1 / 0.07),
+        freeze_mtl_logit_scale: bool = False,
         cast_dtype: Optional[torch.dtype] = None,
         output_dict: bool = False,
         cache_dir: Optional[str] = None,
@@ -702,6 +704,12 @@ class CustomTextCLIP(nn.Module):
             )
         else:
             self.logit_bias = None
+        self.mtl_logit_scale = None
+        if init_mtl_logit_scale is not None:
+            self.mtl_logit_scale = nn.Parameter(
+                torch.ones([]) * init_mtl_logit_scale,
+                requires_grad=not freeze_mtl_logit_scale
+            )
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991
@@ -754,16 +762,17 @@ class CustomTextCLIP(nn.Module):
             }
             if self.logit_bias is not None:
                 out_dict['logit_bias'] = self.logit_bias
+            if self.mtl_logit_scale is not None:
+                out_dict['mtl_logit_scale'] = self.mtl_logit_scale.exp()
             return out_dict
 
+        out_tuple = (image_features, text_features, self.logit_scale.exp())
         if self.logit_bias is not None:
-            return (
-                image_features,
-                text_features,
-                self.logit_scale.exp(),
-                self.logit_bias,
-            )
-        return image_features, text_features, self.logit_scale.exp()
+            out_tuple += (self.logit_bias,)
+        if self.mtl_logit_scale is not None:
+            out_tuple += (self.mtl_logit_scale.exp(),)
+
+        return out_tuple
 
 
 def convert_weights_to_lp(model: nn.Module, dtype=torch.float16):

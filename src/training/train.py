@@ -349,12 +349,6 @@ def train_one_epoch(
 
     start = time.time()
 
-    mtl_logit_scale = None
-    if args.mtl_temperature:
-        mtl_logit_scale = torch.tensor(
-            [1 / args.mtl_temperature]
-        ).to(device=device, dtype=input_dtype, non_blocking=True)
-
     _dataset_records = []
     _completed_epoch = 0
 
@@ -474,6 +468,7 @@ def train_one_epoch(
 
                 modelout['output_dict'] = True
                 logit_scale = modelout['logit_scale']
+                mtl_logit_scale = modelout.pop('mtl_logit_scale', None)
                 image_features = modelout.pop('image_features')
                 text_features = modelout.pop('text_features')
                 if run_mtl_training:
@@ -505,7 +500,6 @@ def train_one_epoch(
                 )
 
                 losses = defaultdict(lambda: torch.zeros(1, device=device))
-
                 _losses = loss(left_features, right_features, **modelout)
                 contrastive_loss = sum(_losses.values())
                 losses['contrastive_loss'] += contrastive_loss
@@ -517,7 +511,6 @@ def train_one_epoch(
                         else mtl_losses['*']
                     )
                     if mtl_logit_scale is not None:
-                        _ = modelout.pop('logit_scale')
                         modelout['logit_scale'] = mtl_logit_scale
                     logit_scale_mtl = modelout['logit_scale']
                     modelout['output_dict'] = False
@@ -627,6 +620,7 @@ def train_one_epoch(
 
                     modelout = model(allimages, alltexts)
                     modelout['output_dict'] = True
+                    mtl_logit_scale = modelout.pop('mtl_logit_scale', None)
                     image_features = modelout.pop('image_features')
                     text_features = modelout.pop('text_features')
 
