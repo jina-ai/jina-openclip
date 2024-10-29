@@ -882,7 +882,7 @@ def train_one_epoch(
             _batch_time_m.reset()
             _data_time_m.reset()
 
-        if (step + 1) % 1000 == 0:
+        if args.eval_steps and (step + 1) % args.eval_steps == 0:
             _completed_epoch += 1
             if args.save_logs:
 

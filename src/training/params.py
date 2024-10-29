@@ -825,6 +825,15 @@ def parse_args(args):
         help='How often (in epochs) to run evaluation with val data.',
     )
     parser.add_argument(
+        '--eval-steps',
+        type=int,
+        default=0,
+        help=(
+            'Define intermediate eval steps, set to 0 to fallback to evaluation '
+            'per epoch.'
+        ),
+    )
+    parser.add_argument(
         '--clip-benchmark-frequency',
         type=int,
         default=1,
