@@ -678,7 +678,7 @@ class CustomTextCLIP(nn.Module):
         init_logit_scale: float = np.log(1 / 0.07),
         init_logit_bias: Optional[float] = None,
         freeze_logit_scale: bool = False,
-        init_mtl_logit_scale: float = np.log(1 / 0.07),
+        init_mtl_logit_scale: Optional[float] = None,
         freeze_mtl_logit_scale: bool = False,
         cast_dtype: Optional[torch.dtype] = None,
         output_dict: bool = False,
