@@ -178,8 +178,6 @@ class HFTextEncoder(nn.Module):
         self.output_tokens = output_tokens
         self.output_dim = output_dim
 
-        # TODO: find better way to get this information
-        uses_transformer_pooler = pooler_type == 'cls_pooler'
         model_config_kwargs = model_config_kwargs or {}
 
         if config is None:
@@ -204,18 +202,18 @@ class HFTextEncoder(nn.Module):
                 self.transformer = create_func(
                     model_args,
                     trust_remote_code=trust_remote_code,
-                    add_pooling_layer=uses_transformer_pooler,
                     revision=revision,
                     code_revision=code_revision,
+                    **model_config_kwargs
                 )
                 self.transformer = self.transformer.encoder
             else:
                 self.transformer = create_func(
                     model_args,
                     trust_remote_code=trust_remote_code,
-                    add_pooling_layer=uses_transformer_pooler,
                     revision=revision,
                     code_revision=code_revision,
+                    **model_config_kwargs
                 )
         else:
             self.config = config
@@ -223,19 +221,16 @@ class HFTextEncoder(nn.Module):
             self.transformer = AutoModel.from_config(
                 self.config,
                 trust_remote_code=trust_remote_code,
-                add_pooling_layer=uses_transformer_pooler,
                 revision=revision,
                 code_revision=code_revision,
             )
-
-        if pooler_type is None:  # get default arch pooler
-            pooler_type = _HF_ARCH_DICT[self.config.model_type]['pooler']
 
         # FIXME downstream users of OpenCLIP models use these attr,
         #  need to verify valid across all models
         self.vocab_size = getattr(self.config, 'vocab_size', 0)
         self.context_length = getattr(self.config, 'max_position_embeddings', 0)
 
+        pooler_type = pooler_type or _HF_ARCH_DICT[self.config.model_type]['pooler']
         self.pooler = _POOLERS[pooler_type]()
 
         d_model = getattr(

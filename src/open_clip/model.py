@@ -155,6 +155,7 @@ class CLIPTextCfg:
     hf_trust_remote_code: bool = False
     hf_model_revision: Optional[str] = None
     hf_model_code_revision: Optional[str] = None
+    hf_model_kwargs: Optional[Dict[str, Any]] = None
 
 
 def get_cast_dtype(precision: str):
@@ -257,6 +258,29 @@ def load_checkpoint(
 
     state_dict = {key: value for key, value in state_dict.items() if 'rope' not in key}
     resize_eva_pos_embed(state_dict, model)
+
+    # this happens when we try to load a checkpoint without lora (XLMRobertaModel) into
+    # a model with lora (XLMRobertaLora)
+    if isinstance(model, CustomTextCLIP) and hasattr(model.text.transformer, 'roberta'):
+        _modified_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith('text.transformer.'):
+                _new_k = k[len('text.transformer.'):]
+                if _new_k.startswith('roberta.'):
+                    _modified_state_dict[k] = v
+                else:
+                    _new_k = 'text.transformer.roberta.' + _new_k
+                    if 'emb_ln' in _new_k or 'norm1' in _new_k or 'norm2' in _new_k:
+                        _modified_state_dict[_new_k] = v
+                    elif _new_k.endswith('.weight'):
+                        _new_k = _new_k[:-len('.weight')]
+                        _new_k = _new_k + '.parametrizations.weight.original'
+                        _modified_state_dict[_new_k] = v
+                    else:
+                        _modified_state_dict[_new_k] = v
+            else:
+                _modified_state_dict[k] = v
+        state_dict = copy.deepcopy(_modified_state_dict)
 
     if exclude:
         _state_dict = {}
@@ -488,6 +512,7 @@ def _build_text_tower(
             trust_remote_code=text_cfg.hf_trust_remote_code,
             revision=text_cfg.hf_model_revision,
             code_revision=text_cfg.hf_model_code_revision,
+            model_config_kwargs=text_cfg.hf_model_kwargs,
         )
     else:
         act_layer = QuickGELU if quick_gelu else nn.GELU
