@@ -281,11 +281,11 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
                 max_length=self._max_seq_length,
             ).to(self._device)
 
-            model_output = self._model.text.transformer(**encoded_input)
-            sentence_embeddings = self._mean_pooling(
-                model_output, encoded_input['attention_mask']
-            )
-            sentence_embeddings = f.normalize(sentence_embeddings, p=2, dim=1)
+            sentence_embeddings = self._model.encode_text(encoded_input['input_ids'])
+            #sentence_embeddings = self._mean_pooling(
+            #    model_output, encoded_input['attention_mask']
+            #)
+            #sentence_embeddings = f.normalize(sentence_embeddings, p=2, dim=1)
             return sentence_embeddings.to(torch.float32).cpu().numpy()
 
         def _clip_embed(self, sentences: list[str]):
