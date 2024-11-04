@@ -1,7 +1,7 @@
 import json
 import os
 from functools import partial
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -313,6 +313,9 @@ def _create_s3_dataloader(
     tokenizer: Union[str, Any],
     sampling_rates: Optional[List[float]] = None,
     resume: Optional[str] = None,
+    task_types: Optional[Dict[str, str]] = None,
+    task_implementation: Literal['none', 'instruction-based'] = 'none',
+    instruction_config: Optional[Dict[str, Tuple[str, str]]] = None,
     batch_size: int = 32,
     max_sequence_length: int = DEFAULT_CONTEXT_LENGTH,
     prefix: str = 's3',
@@ -354,6 +357,9 @@ def _create_s3_dataloader(
             max_batches=max_batches,
             seed=seed,
             synchronous=True,
+            task_types=task_types,
+            task_implementation=task_implementation,
+            instruction_config=instruction_config,
         )
 
     logger.debug('Setting up the S3 dataloader')
@@ -478,6 +484,14 @@ def create_dataloaders(
             upsampling_factors = [
                 float(v) for v in args.train_mtldata_upsampling_factors.split('::')
             ]
+        task_types = None
+        if args.train_mtldata_task_types:
+            task_types = {
+                k: v for k, v in zip(
+                    args.train_mtldata.split('::'),
+                    args.train_mtldata_task_types.split('::')
+                )
+            }
         data['train-mtl'] = _create_s3_dataloader(
             datasets=args.train_mtldata.split('::'),
             bucket=args.train_mtldata_s3bucket,
@@ -499,6 +513,9 @@ def create_dataloaders(
             seed=args.seed,
             rank=args.rank,
             world_size=args.world_size,
+            task_types=task_types,
+            task_implementation=args.train_mtldata_task_implementation,
+            instruction_config=args.train_mtldata_instruction_config,
         )
     else:
         data['train-mtl'] = None

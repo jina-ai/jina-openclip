@@ -23,13 +23,18 @@ s3_client = boto3.client('s3', region_name='eu-central-1')
 INSTRUCTION_CONFIG = MappingProxyType(
     {
         '': ('', ''),
-        'retrieval': ('Query: ', 'Document for retrieval: '),
-        'sts': ('Statement for clustering: ', 'Statement for clustering: '),
-        'reranking': ('Query: ', 'Document for reranking: '),
-        'clustering': ('Statement for clustering: ', 'Statement for clustering: '),
+        'retrieval': (
+            'Represent the query for retrieving evidence documents: ',
+            'Represent the document for retrieval: ',
+        ),
+        'sts': (
+            'Represent the text for Semantic Textual Similarity: ',
+            'Represent the text for Semantic Textual Similarity: ',
+        ),
+        'clustering': ('Cluster the text: ', 'Cluster the text: '),
         'classification': (
-            'Statement for classification: ',
-            'Statement for classification: ',
+            'Classify the text: ',
+            'Classify the text: ',
         ),
     }
 )
@@ -39,12 +44,14 @@ class SimLMCrossEncoder:
     def __init__(
         self,
         model_name: str = 'intfloat/simlm-msmarco-reranker',
+        trust_remote_code: bool = False,
         device: Optional[str] = None,
     ):
         self._model_name = model_name
         self._tokenizer = AutoTokenizer.from_pretrained(self._model_name)
         self._model = AutoModelForSequenceClassification.from_pretrained(
-            self._model_name
+            self._model_name,
+            trust_remote_code=trust_remote_code,
         )
         if device:
             self._device = device
@@ -127,7 +134,8 @@ def get_dataset_info(bucket_name, directory: Optional[str] = None):
     # try to get size info
     try:
         tags = get_tags(bucket_name, directory)
-    except Exception as _:
+    except Exception as e:
+        _ = str(e)
         logger.debug(f'Could not retrieve size values for {bucket_name}/{directory}')
         tags = {}
     dataset_dict = {}

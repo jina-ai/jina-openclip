@@ -271,7 +271,6 @@ class HFTextEncoder(nn.Module):
                     'Tuning more than two LoRA adapters is not supported. '
                     'Please reduce the number.'
                 )
-        print(self._lora_adapter_ids)
 
     def _create_adapter_mask(
         self, num_examples: int, row_sizes: Optional[numpy.ndarray] = None

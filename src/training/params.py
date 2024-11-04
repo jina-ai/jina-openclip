@@ -147,6 +147,38 @@ def parse_args(args):
         help='Similar to --train-txtdata-s3bucket but for --train-mtldata.',
     )
     parser.add_argument(
+        '--train-mtldata-task-implementation',
+        type=str,
+        default='none',
+        help=(
+            'The implementation of the MTL tasks, either \'none\' or '
+            '\'instruction-based\', use the latter to enable instruction tuning.'
+        ),
+    )
+    parser.add_argument(
+        '--train-mtldata-task-types',
+        type=str,
+        default=None,
+        help=(
+            'When --train-mtldata-task-implementation=\'instruction-based\', use this '
+            'argument to specify the task type of each dataset set in --train-mtldata. '
+            'Task types are separated using :: and are given in the same order as the '
+            'datasets in --train-mtldata. All task types should be available as keys '
+            'in the instruction config.'
+        ),
+    )
+    parser.add_argument(
+        '--train-mtldata-instruction-config',
+        type=str,
+        default=None,
+        help=(
+            'Specify a custom instruction template. Keys are task types and values are '
+            'text instruction pairs, first one for queries and second one for '
+            'documents. If None provided, we fall back to the default instruction '
+            'template.'
+        ),
+    )
+    parser.add_argument(
         '--train-num-samples',
         type=int,
         default=None,
@@ -957,6 +989,38 @@ def parse_args(args):
         help='The tokenizer to use when running the MTEB benchmark.',
     )
     parser.add_argument(
+        '--mteb-task-implementation',
+        type=str,
+        default='none',
+        help=(
+            'The implementation of the MTEB tasks, either \'none\' or '
+            '\'instruction-based\', use the latter to evaluate using instructions.'
+        ),
+    )
+    parser.add_argument(
+        '--mteb-task-types',
+        type=str,
+        default=None,
+        help=(
+            'When --mteb-task-implementation=\'instruction-based\', use this '
+            'argument to specify the task type of each task set in --mteb-tasks. '
+            'Task types are separated using , and are given in the same order as the '
+            'tasks in --mteb-tasks. All task types should be available as keys '
+            'in the MTEB instruction config.'
+        ),
+    )
+    parser.add_argument(
+        '--mteb-instruction-config',
+        type=str,
+        default=None,
+        help=(
+            'Specify a custom instruction template to use with MTEB. Keys are task '
+            'types and values are text instruction pairs, first one for queries and '
+            'second one for documents/passages. If None provided, we fall back to the '
+            'default instruction template.'
+        ),
+    )
+    parser.add_argument(
         '--vidore-dataset-name',
         type=str,
         default=None,
@@ -1036,5 +1100,13 @@ def parse_args(args):
     else:
         os.environ['ENV_TYPE'] = 'pytorch'
         dsinit = None
+
+    if isinstance(args.train_mtldata_instruction_config, str):
+        args.train_mtldata_instruction_config = json.loads(
+            args.train_mtldata_instruction_config
+        )
+
+    if isinstance(args.mteb_instruction_config, str):
+        args.mteb_instruction_config = json.loads(args.mteb_instruction_config)
 
     return args, dsinit
