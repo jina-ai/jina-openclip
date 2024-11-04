@@ -362,15 +362,19 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             _kwargs = {**kwargs, 'add_instructions': False}
             return self.encode(sentences, **_kwargs)
 
-        def encode_queries(self, sentences: List[str], **kwargs):
+        def encode_queries(
+            self, sentences: List[str], add_instructions: bool = True, **kwargs
+        ):
             return self._encode_asymmetric(
-                sentences, self._add_instructions, 'encode_queries', **kwargs
+                sentences, add_instructions, 'encode_queries', **kwargs
             )
 
-        def encode_corpus(self, sentences: List[Dict[str, str]], **kwargs):
+        def encode_corpus(
+            self, sentences: List[str], add_instructions: bool = True, **kwargs
+        ):
             _sentences = [self._construct_document(sentence) for sentence in sentences]
             return self._encode_asymmetric(
-                _sentences, self._add_instructions, 'encode_corpus', **kwargs
+                _sentences, add_instructions, 'encode_corpus', **kwargs
             )
 
     _mteb_model = _MTEBEncoder(
