@@ -122,7 +122,7 @@ def evaluate(
             )
             if passage_instruction != query_instruction:
                 batch_passage_embeds = f.normalize(
-                    model.encode_passage(batch_passages_tokens), dim=-1
+                    model.encode_text(batch_passages_tokens), dim=-1
                 )
             else:
                 batch_passage_embeds = batch_query_embeds.detach().clone()
@@ -145,18 +145,9 @@ def evaluate(
 
     # construct a the positive pair matrix, which tells whether each text-image pair
     # is a positive or not
-    text_to_image_positive_pairs = torch.zeros_like(
-        text_to_image_scores, dtype=torch.bool
-    )
-    text_to_image_positive_pairs[
-        torch.arange(len(text_to_image_scores)), texts_image_index
-    ] = True
-    image_to_text_positive_pairs = torch.zeros_like(
-        image_to_text_scores, dtype=torch.bool
-    )
-    image_to_text_positive_pairs[
-        torch.arange(len(image_to_text_scores)), texts_image_index
-    ] = True
+    positive_pairs = torch.zeros_like(text_to_image_scores, dtype=torch.bool)
+    positive_pairs[torch.arange(len(text_to_image_scores)), texts_image_index] = True
+
     metrics = {}
 
     recall_k_list = recall_k_list or [5]
@@ -182,7 +173,7 @@ def evaluate(
                 _batchify(
                     _recall_at_k,
                     text_to_image_scores,
-                    text_to_image_positive_pairs,
+                    positive_pairs,
                     batch_size,
                     device,
                     k=recall_k,
@@ -198,7 +189,7 @@ def evaluate(
                 _batchify(
                     _recall_at_k,
                     image_to_text_scores,
-                    image_to_text_positive_pairs,
+                    positive_pairs.T,
                     batch_size,
                     device,
                     k=recall_k,
