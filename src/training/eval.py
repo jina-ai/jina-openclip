@@ -173,6 +173,15 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
     else:
         module = model
 
+    zeroshot_retrieval_query_instruction = ''
+    zeroshot_retrieval_passage_instruction = ''
+    if args.clip_benchmark_task_implementation == 'instruction-based':
+        instructcfg = args.clip_benchmark_instruction_config or INSTRUCTION_CONFIG
+        retrieval_instructions = instructcfg.get('retrieval', ('', ''))
+        zeroshot_retrieval_query_instruction, zeroshot_retrieval_passage_instruction = (
+            retrieval_instructions
+        )
+
     autocast = get_autocast(args.precision)
     with autocast():
         results = run_benchmark(
@@ -195,6 +204,10 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
             webdataset_root=args.clip_benchmark_webdataset_root,
             distributed=False,
             recall_ks=[int(k) for k in args.clip_benchmark_recall_ks.split(',')],
+            zeroshot_retrieval_query_instruction=zeroshot_retrieval_query_instruction,
+            zeroshot_retrieval_passage_instruction=(
+                zeroshot_retrieval_passage_instruction
+            ),
         )
     metrics = {}
     for result in results:

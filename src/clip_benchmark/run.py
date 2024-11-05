@@ -72,6 +72,8 @@ def run_benchmark(
     linear_probe_fewshot_k: int = -1,
     linear_probe_fewshot_lr: float = 0.1,
     linear_probe_fewshot_epochs: int = 10,
+    zeroshot_retrieval_query_instruction: str = '',
+    zeroshot_retrieval_passage_instruction: str = '',
 ):
     _models = []
     for name in _as_list(models):
@@ -225,6 +227,12 @@ def run_benchmark(
                 linear_probe_fewshot_k=linear_probe_fewshot_k,
                 linear_probe_fewshot_lr=linear_probe_fewshot_lr,
                 linear_probe_fewshot_epochs=linear_probe_fewshot_epochs,
+                zeroshot_retrieval_query_instruction=(
+                    zeroshot_retrieval_query_instruction
+                ),
+                zeroshot_retrieval_passage_instruction=(
+                    zeroshot_retrieval_passage_instruction
+                ),
             )
         except LanguageNotSupportedError:
             print(

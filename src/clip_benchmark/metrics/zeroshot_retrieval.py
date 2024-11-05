@@ -61,6 +61,8 @@ def evaluate(
     device: Union[str, torch.device],
     precision: str = 'amp',
     recall_k_list: Optional[list[int]] = None,
+    query_instruction: str = '',
+    passage_instruction: str = '',
 ):
     """
     Evaluate the model on the given dataset
@@ -77,14 +79,17 @@ def evaluate(
     precision: floating point precision
     recall_k_list: list of int
         recall@k k's to use
+    query_instruction: optionally add instruction to texts when used as queries
+    passage_instruction: optionally add instruction to texts when used as passages
     Returns
     -------
         Dict of retrieval metrics
     """
     # list of batch of images embedding
-    batch_images_emb_list = []
+    batch_image_embeds_list = []
     # list of batch of text embedding
-    batch_texts_emb_list = []
+    batch_query_embeds_list = []
+    batch_passage_embeds_list = []
     # for each text, we collect the corresponding image index, as each image can
     # have multiple corresponding texts
     texts_image_index = []
@@ -93,10 +98,16 @@ def evaluate(
 
     for batch_images, batch_texts, inds in tqdm(dataloader):
         batch_images = batch_images.to(device)
+
+        batch_queries = [
+            f'{query_instruction}{text}' for texts in batch_texts for text in texts
+        ]
+        batch_passages = [
+            f'{passage_instruction}{text}' for texts in batch_texts for text in texts
+        ]
         # tokenize all texts in the batch
-        batch_texts_tok = tokenizer(
-            [text for i, texts in enumerate(batch_texts) for text in texts]
-        ).to(device)
+        batch_queries_tokens = tokenizer(batch_queries).to(device)
+        batch_passages_tokens = tokenizer(batch_passages).to(device)
 
         # store the index of image for each text
         batch_texts_image_index = [
@@ -105,26 +116,47 @@ def evaluate(
 
         # compute the embedding of images and texts
         with torch.no_grad(), autocast():
-            batch_images_emb = f.normalize(model.encode_image(batch_images), dim=-1)
-            batch_texts_emb = f.normalize(model.encode_text(batch_texts_tok), dim=-1)
+            batch_image_embeds = f.normalize(model.encode_image(batch_images), dim=-1)
+            batch_query_embeds = f.normalize(
+                model.encode_text(batch_queries_tokens), dim=-1
+            )
+            if passage_instruction != query_instruction:
+                batch_passage_embeds = f.normalize(
+                    model.encode_passage(batch_passages_tokens), dim=-1
+                )
+            else:
+                batch_passage_embeds = batch_query_embeds.detach().clone()
 
-        batch_images_emb_list.append(batch_images_emb.cpu())
-        batch_texts_emb_list.append(batch_texts_emb.cpu())
+        batch_image_embeds_list.append(batch_image_embeds.cpu())
+        batch_query_embeds_list.append(batch_query_embeds.cpu())
+        batch_passage_embeds_list.append(batch_passage_embeds.cpu())
         texts_image_index.extend(batch_texts_image_index)
 
-    batch_size = len(batch_images_emb_list[0])
+    batch_size = len(batch_image_embeds_list[0])
 
     # concatenate all embeddings
-    images_emb = torch.cat(batch_images_emb_list)
-    texts_emb = torch.cat(batch_texts_emb_list)
+    images_emb = torch.cat(batch_image_embeds_list)
+    queries_emb = torch.cat(batch_query_embeds_list)
+    passages_emb = torch.cat(batch_passage_embeds_list)
 
     # get the score for each text and image pair
-    scores = texts_emb @ images_emb.t()
+    text_to_image_scores = queries_emb @ images_emb.t()
+    image_to_text_scores = images_emb @ passages_emb.t()
 
     # construct a the positive pair matrix, which tells whether each text-image pair
     # is a positive or not
-    positive_pairs = torch.zeros_like(scores, dtype=torch.bool)
-    positive_pairs[torch.arange(len(scores)), texts_image_index] = True
+    text_to_image_positive_pairs = torch.zeros_like(
+        text_to_image_scores, dtype=torch.bool
+    )
+    text_to_image_positive_pairs[
+        torch.arange(len(text_to_image_scores)), texts_image_index
+    ] = True
+    image_to_text_positive_pairs = torch.zeros_like(
+        image_to_text_scores, dtype=torch.bool
+    )
+    image_to_text_positive_pairs[
+        torch.arange(len(image_to_text_scores)), texts_image_index
+    ] = True
     metrics = {}
 
     recall_k_list = recall_k_list or [5]
@@ -148,7 +180,12 @@ def evaluate(
         metrics[f'image_retrieval_recall@{recall_k}'] = (
             (
                 _batchify(
-                    _recall_at_k, scores, positive_pairs, batch_size, device, k=recall_k
+                    _recall_at_k,
+                    text_to_image_scores,
+                    text_to_image_positive_pairs,
+                    batch_size,
+                    device,
+                    k=recall_k,
                 )
                 > 0
             )
@@ -160,8 +197,8 @@ def evaluate(
             (
                 _batchify(
                     _recall_at_k,
-                    scores.T,
-                    positive_pairs.T,
+                    image_to_text_scores,
+                    image_to_text_positive_pairs,
                     batch_size,
                     device,
                     k=recall_k,

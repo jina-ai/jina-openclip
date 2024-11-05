@@ -947,6 +947,26 @@ def parse_args(args):
         ),
     )
     parser.add_argument(
+        '--clip-benchmark-task-implementation',
+        type=str,
+        default='none',
+        help=(
+            'The implementation of the CLIP Benchmark retrieval tasks, either \'none\' '
+            'or \'instruction-based\', use the latter to evaluate using instructions.'
+        ),
+    )
+    parser.add_argument(
+        '--clip-benchmark-instruction-config',
+        type=str,
+        default=None,
+        help=(
+            'Specify a custom instruction template to use with CLIP Benchmark. Keys '
+            'are task types and values are text instruction pairs, first one for '
+            'queries and second one for documents/passages. If None provided, we fall '
+            'back to the default instruction template.'
+        ),
+    )
+    parser.add_argument(
         '--mteb-tasks',
         type=str,
         default=(
