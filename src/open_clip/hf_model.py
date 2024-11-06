@@ -1,6 +1,6 @@
 import re
 from typing import Any, Dict, Optional, Tuple
-
+import numpy
 import torch
 import torch.nn as nn
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PretrainedConfig
@@ -178,8 +178,6 @@ class HFTextEncoder(nn.Module):
         self.output_tokens = output_tokens
         self.output_dim = output_dim
 
-        # TODO: find better way to get this information
-        uses_transformer_pooler = pooler_type == 'cls_pooler'
         model_config_kwargs = model_config_kwargs or {}
 
         if config is None:
@@ -204,18 +202,19 @@ class HFTextEncoder(nn.Module):
                 self.transformer = create_func(
                     model_args,
                     trust_remote_code=trust_remote_code,
-                    add_pooling_layer=uses_transformer_pooler,
                     revision=revision,
                     code_revision=code_revision,
+                    **model_config_kwargs
                 )
                 self.transformer = self.transformer.encoder
             else:
                 self.transformer = create_func(
                     model_args,
                     trust_remote_code=trust_remote_code,
-                    add_pooling_layer=uses_transformer_pooler,
                     revision=revision,
+                    add_pooling_layer=False,
                     code_revision=code_revision,
+                    **model_config_kwargs
                 )
         else:
             self.config = config
@@ -223,19 +222,16 @@ class HFTextEncoder(nn.Module):
             self.transformer = AutoModel.from_config(
                 self.config,
                 trust_remote_code=trust_remote_code,
-                add_pooling_layer=uses_transformer_pooler,
                 revision=revision,
                 code_revision=code_revision,
             )
-
-        if pooler_type is None:  # get default arch pooler
-            pooler_type = _HF_ARCH_DICT[self.config.model_type]['pooler']
 
         # FIXME downstream users of OpenCLIP models use these attr,
         #  need to verify valid across all models
         self.vocab_size = getattr(self.config, 'vocab_size', 0)
         self.context_length = getattr(self.config, 'max_position_embeddings', 0)
 
+        pooler_type = pooler_type or _HF_ARCH_DICT[self.config.model_type]['pooler']
         self.pooler = _POOLERS[pooler_type]()
 
         d_model = getattr(
@@ -252,10 +248,74 @@ class HFTextEncoder(nn.Module):
                 nn.GELU(),
                 nn.Linear(hidden_size, output_dim, bias=proj_bias),
             )
+        self._lora_adapter_ids = None
+        lora_adapters_to_train = self.config.lora_adaptations
+        if lora_adapters_to_train:
+            lora_tasks = {
+                task: num
+                for num, task in enumerate(self.transformer.config.lora_adaptations)
+            }
+            for lora_adapter in lora_adapters_to_train:
+                if lora_adapter not in lora_tasks:
+                    raise ValueError(
+                        f"Unsupported lora adapter '{lora_adapter}'. "
+                        f"Supported adapters are: "
+                        f"{', '.join(self.transformer.config.lora_adaptations)}."
+                    )
+
+            self._lora_adapter_ids = [
+                lora_tasks[name] for name in lora_adapters_to_train
+            ]
+            if len(self._lora_adapter_ids) > 2:
+                raise ValueError(
+                    'Tuning more than two LoRA adapters is not supported. '
+                    'Please reduce the number.'
+                )
+
+    def _create_adapter_mask(
+        self, num_examples: int, row_sizes: Optional[numpy.ndarray] = None
+    ):
+        if len(self._lora_adapter_ids) == 1:
+            adapter_mask = torch.full(
+                (num_examples,),
+                self._lora_adapter_ids[0],
+                dtype=torch.int32,
+            )
+        elif len(self._lora_adapter_ids) == 2:
+            if row_sizes is None:
+                raise ValueError(
+                    'When tuning 2 LoRA adapters `row_sizes` must not be `None`.'
+                )
+            row_sizes = torch.tensor(row_sizes)
+            cumulative_sizes = torch.cumsum(row_sizes, dim=0)
+            first_indices = torch.cat((torch.tensor([0]), cumulative_sizes[:-1]))
+            remaining_indices = torch.cat(
+                [
+                    torch.arange(first_indices[i] + 1, first_indices[i] + row_sizes[i])
+                    for i in range(len(row_sizes))
+                ]
+            )
+            adapter_mask = torch.empty(
+                num_examples, dtype=torch.int32, device=self._device
+            )
+            adapter_mask[first_indices] = self._lora_adapter_ids[0]
+            adapter_mask[remaining_indices] = self._lora_adapter_ids[1]
+        else:
+            raise ValueError(
+                'Tuning more than two LoRA adapters is not supported. '
+                'Please reduce the number.'
+            )
+        return adapter_mask
 
     def forward(self, x: torch.Tensor):
         attn_mask = (x != self.config.pad_token_id).long()
-        out = self.transformer(input_ids=x, attention_mask=attn_mask)
+        num_examples = x.shape[0]
+        lora_args = {}
+        if self._lora_adapter_ids:
+            lora_args['adapter_mask'] = self._create_adapter_mask(
+                        num_examples
+                    ).to(x.device)
+        out = self.transformer(input_ids=x, attention_mask=attn_mask, **lora_args)
         pooled_out = self.pooler(out, attn_mask)
         projected = self.proj(pooled_out)
 

@@ -3,7 +3,7 @@ import math
 import os
 import random
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Set, Union, cast
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 import numpy as np
 import torch
@@ -21,6 +21,7 @@ except ImportError:
 
 from open_clip import get_input_dtype
 
+from training.data.utils import INSTRUCTION_CONFIG
 from training.distributed import is_master
 from training.utils import get_autocast
 
@@ -172,6 +173,15 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
     else:
         module = model
 
+    zeroshot_retrieval_query_instruction = ''
+    zeroshot_retrieval_passage_instruction = ''
+    if args.clip_benchmark_task_implementation == 'instruction-based':
+        instructcfg = args.clip_benchmark_instruction_config or INSTRUCTION_CONFIG
+        retrieval_instructions = instructcfg.get('retrieval', ('', ''))
+        zeroshot_retrieval_query_instruction, zeroshot_retrieval_passage_instruction = (
+            retrieval_instructions
+        )
+
     autocast = get_autocast(args.precision)
     with autocast():
         results = run_benchmark(
@@ -194,6 +204,10 @@ def _run_clip_benchmark(model, tokenizer, transform, epoch, args):
             webdataset_root=args.clip_benchmark_webdataset_root,
             distributed=False,
             recall_ks=[int(k) for k in args.clip_benchmark_recall_ks.split(',')],
+            zeroshot_retrieval_query_instruction=zeroshot_retrieval_query_instruction,
+            zeroshot_retrieval_passage_instruction=(
+                zeroshot_retrieval_passage_instruction
+            ),
         )
     metrics = {}
     for result in results:
@@ -231,6 +245,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             batch_size: int = 4,
             max_seq_length: int = 8192,
             device: Union[str, torch.device] = 'cpu',
+            instructions: Union[str, None, Dict[str, Tuple[str, str]]] = None,
         ):
             super(_MTEBEncoder, self).__init__()
 
@@ -247,6 +262,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
                 _model = clip_model
 
             self._model = _model
+            self._instructions = self.set_instructions(instructions or '')
 
             if isinstance(_model, CLIP):
                 assert _tokenizer is not None
@@ -261,6 +277,25 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
                     force_download=True,
                 )
                 self._embed = self._hf_embed
+
+        def set_instructions(self, instructions: Union[str, Dict[str, str]]):
+            if isinstance(instructions, dict):
+                for key in ['left', 'right']:
+                    if key not in instructions:
+                        raise ValueError(f'Instruction for {key} is missing')
+            self._instructions = {
+                'encode_queries': (
+                    instructions['left'] if isinstance(instructions, dict)
+                    else instructions
+                ),
+                'encode_corpus': (
+                    instructions['right'] if isinstance(instructions, dict)
+                    else instructions
+                ),
+            }
+
+        def get_instructions(self):
+            return self._instructions
 
         @staticmethod
         def _mean_pooling(model_output, attention_mask):
@@ -280,12 +315,7 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
                 return_tensors='pt',
                 max_length=self._max_seq_length,
             ).to(self._device)
-
-            model_output = self._model.text.transformer(**encoded_input)
-            sentence_embeddings = self._mean_pooling(
-                model_output, encoded_input['attention_mask']
-            )
-            sentence_embeddings = f.normalize(sentence_embeddings, p=2, dim=1)
+            sentence_embeddings = self._model.encode_text(encoded_input['input_ids'])
             return sentence_embeddings.to(torch.float32).cpu().numpy()
 
         def _clip_embed(self, sentences: list[str]):
@@ -293,8 +323,32 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
             sentence_embeddings = self._model.encode_text(x)
             return sentence_embeddings.to(torch.float32).cpu().numpy()
 
+        @staticmethod
+        def _construct_document(doc):
+            if isinstance(doc, str):
+                return doc
+            elif 'title' in doc:
+                return f'{doc["title"]} {doc["text"].strip()}'
+            else:
+                return doc['text'].strip()
+
         @torch.no_grad()
-        def encode(self, sentences: list[str], batch_size: int = 1, **_):
+        def encode(
+            self,
+            sentences: list[str],
+            batch_size: int = 1,
+            add_instructions: bool = False,
+            **_,
+        ):
+            if add_instructions:
+                if isinstance(self._instructions, str):
+                    instruction = self._instructions
+                elif 'encode_queries' in self._instructions:
+                    instruction = self._instructions['encode_queries']
+                else:
+                    raise ValueError('Instruction is malformed')
+                sentences = [f'{instruction}{sentence}' for sentence in sentences]
+
             embeddings = []
             with torch.inference_mode():
                 for i in range(0, len(sentences), batch_size):
@@ -302,6 +356,39 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
                     embeddings.append(self._embed(batch))
 
             return np.concatenate(embeddings, axis=0)
+
+        def _encode_asymmetric(
+            self,
+            sentences: List[str],
+            add_instructions: bool = False,
+            instruction_key: str = 'encode_queries',
+            **kwargs,
+        ):
+            if add_instructions and self._instructions:
+                if isinstance(self._instructions, str):
+                    instruction = self._instructions
+                elif instruction_key in self._instructions:
+                    instruction = self._instructions[instruction_key]
+                else:
+                    raise ValueError('Instruction is malformed')
+                sentences = [f'{instruction}{sentence}' for sentence in sentences]
+            _kwargs = {**kwargs, 'add_instructions': False}
+            return self.encode(sentences, **_kwargs)
+
+        def encode_queries(
+            self, sentences: List[str], add_instructions: bool = True, **kwargs
+        ):
+            return self._encode_asymmetric(
+                sentences, add_instructions, 'encode_queries', **kwargs
+            )
+
+        def encode_corpus(
+            self, sentences: List[str], add_instructions: bool = True, **kwargs
+        ):
+            _sentences = [self._construct_document(sentence) for sentence in sentences]
+            return self._encode_asymmetric(
+                _sentences, add_instructions, 'encode_corpus', **kwargs
+            )
 
     _mteb_model = _MTEBEncoder(
         clip_model=model,
@@ -319,11 +406,40 @@ def _run_mteb_benchmark(model, tokenizer, epoch, args):
     select_metrics = set(args.mteb_metrics.split(','))
     autocast = get_autocast(args.precision)
 
+    mteb_instruction_config = args.mteb_instruction_config or INSTRUCTION_CONFIG
+    mteb_tasks_to_types = {}
+    if args.mteb_task_implementation == 'instruction-based':
+        if args.mteb_task_types is None:
+            raise ValueError(
+                'When running instruction based MTEB evaluation, the MTEB task types '
+                'are required'
+            )
+        else:
+            mteb_task_types = args.mteb_task_types.split(',')
+            if len(mteb_task_types) != len(tasks):
+                raise ValueError(
+                    f'Got {len(mteb_task_types)} MTEB task types, expected {len(tasks)}'
+                )
+            for _task, tasktype in zip(tasks, mteb_task_types):
+                assert tasktype in mteb_instruction_config, (
+                    f'Task type {tasktype} not in instruction template'
+                )
+                mteb_tasks_to_types[_task] = tasktype
+
     with autocast():
         for task in tasks:
             split = 'dev' if task == 'MSMARCO' else 'test'
             mteb_tasks = get_tasks(tasks=[task], languages=langs)
             evaluation = MTEB(tasks=mteb_tasks)
+            if task in mteb_tasks_to_types:
+                task_type = mteb_tasks_to_types[task]
+                left, right = mteb_instruction_config[task_type]
+                _instructions = {'left': left, 'right': right}
+            else:
+                logger.warning(f'No instructions for task {task}')
+                _instructions = ''
+
+            _mteb_model.set_instructions(_instructions)
             results = evaluation.run(
                 model=_mteb_model,
                 verbosity=0,
@@ -692,18 +808,14 @@ def evaluate(
     data,
     epoch: int,
     args,
+    step_now: int = 0,
     tb_writer: Any = None,
 ):
     metrics = {}
     if not is_master(args):
         return metrics
 
-    if 'train' in data:
-        dataloader = data['train'].dataloader
-        num_batches_per_epoch = dataloader.num_batches // args.accum_freq
-        step = num_batches_per_epoch * epoch
-    else:
-        step = None
+    step = step_now
 
     model.eval()
 

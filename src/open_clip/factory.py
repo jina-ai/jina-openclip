@@ -289,6 +289,13 @@ def create_model(
                         m.data = m.data.to(torch.float32)
                     elif hasattr(m, 'logit_scale'):
                         m.logit_scale.data = m.logit_scale.data.to(torch.float32)
+                        if (
+                            hasattr(m, 'mtl_logit_scale')
+                            and m.mtl_logit_scale is not None
+                        ):
+                            m.mtl_logit_scale.data = m.mtl_logit_scale.data.to(
+                                torch.float32
+                            )
 
                 model.apply(_convert_back_to_fp32)
 

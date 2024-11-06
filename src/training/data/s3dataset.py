@@ -20,6 +20,7 @@ from training.data.utils import (
     get_directories,
     get_shard_size,
     get_shards,
+    INSTRUCTION_CONFIG,
 )
 
 csv.field_size_limit(sys.maxsize)
@@ -78,8 +79,10 @@ class S3Dataset(IterableDataset):
         shard_num: int = 0,
         index: Optional[int] = None,
         ce_model_name: str = 'intfloat/simlm-msmarco-reranker',
+        ce_trust_remote_code: bool = False,
         interleaved: bool = False,
         task_implementation: Literal['none', 'instruction-based'] = 'none',
+        instruction_config: Optional[Dict] = None,
     ):
         """A dataset that iterates through shards of a dataset stored
             in an S3 bucket.
@@ -108,6 +111,7 @@ class S3Dataset(IterableDataset):
         )
         self._task_type = task_type
         self._task_implementation = task_implementation
+        self._instruction_config = instruction_config
 
         self._dataset = dataset
         shards = get_shards(
@@ -182,19 +186,24 @@ class S3Dataset(IterableDataset):
         )
 
         if self._add_ce_scores == 'true':
-            self._cross_encoder_model = self._load_ce_model(ce_model_name)
+            self._cross_encoder_model = self._load_ce_model(
+                ce_model_name, ce_trust_remote_code,
+            )
 
         self._tmpdir = tempfile.TemporaryDirectory()
         self._thread_pool = ThreadPoolExecutor(max_workers=1)
 
     @staticmethod
-    def _load_ce_model(ce_model_name):
+    def _load_ce_model(ce_model_name, ce_trust_remote_code=False):
         if ce_model_name.startswith('cross-encoder/'):
             from sentence_transformers import CrossEncoder
 
             return CrossEncoder(ce_model_name, max_length=512)
         else:
-            return SimLMCrossEncoder(model_name=ce_model_name)
+            return SimLMCrossEncoder(
+                model_name=ce_model_name,
+                trust_remote_code=ce_trust_remote_code,
+            )
 
     def _get_ce_scores(self, query: str, pos: str, *negs: str):
         return self._cross_encoder_model.predict(
@@ -269,7 +278,10 @@ class S3Dataset(IterableDataset):
                     scores = [float(row[-1])]
 
                 if self._task_implementation == 'instruction-based':
-                    out = add_instruction(out, task_type=self._task_type)
+                    instr_config = self._instruction_config or INSTRUCTION_CONFIG
+                    out = add_instruction(
+                        out, task_type=self._task_type, instruction_config=instr_config
+                    )
 
                 yield self._dataset, (out, scores)
 
@@ -302,6 +314,7 @@ class MultiDataset(IterableDataset):
         sampling_rates: Optional[Dict[str, float]] = None,
         task_types: Optional[Dict[str, str]] = None,
         task_implementation: Literal['none', 'instruction-based'] = 'none',
+        instruction_config: Optional[Dict[str, Tuple[str, str]]] = None,
         max_batches: Optional[int] = None,
         num_batches: int = 0,
         dialect: Literal['csv', 'tsv'] = 'tsv',
@@ -346,6 +359,7 @@ class MultiDataset(IterableDataset):
         self._synchronous = synchronous
         self._task_types = task_types or dict()
         self._task_implementation = task_implementation
+        self._instruction_config = instruction_config
 
         datasets: Optional[Union[List[str], List[Dict[str, Any]]]]
         if datasets is None:
@@ -362,6 +376,8 @@ class MultiDataset(IterableDataset):
                     for folder in get_directories(dset_parent_dir)
                 ]
 
+        s3_dataset_kwargs = ('ce_model_name', 'ce_trust_remote_code',)
+
         if isinstance(datasets, list):
             self._datasets = {
                 dspath: S3Dataset(
@@ -372,10 +388,16 @@ class MultiDataset(IterableDataset):
                     input_type_dict=input_type_dict,
                     task_type=self._task_types.get(dspath),
                     task_implementation=self._task_implementation,
+                    instruction_config=self._instruction_config,
                     directory=_path_to_dir(dspath),
                     max_shards=max_shards,
                     dialect=dialect,
                     interleaved=synchronous,
+                    **{
+                        key: value
+                        for key, value in kwargs.items()
+                        if key in s3_dataset_kwargs
+                    },
                 )
                 for dspath in datasets
             }
@@ -392,15 +414,16 @@ class MultiDataset(IterableDataset):
                     input_type_dict=input_type_dict,
                     task_type=self._task_types.get(dspath),
                     task_implementation=self._task_implementation,
+                    instruction_config=self._instruction_config,
                     max_shards=dataset['max_shards'],
                     dialect=dataset['dialect'],
                     shard_num=dataset['current_shard_num'],
                     index=dataset['current_index'],
-                    **(
-                        {'ce_model_name': kwargs['ce_model_name']}
-                        if 'ce_model_name' in kwargs
-                        else {}
-                    ),
+                    **{
+                        key: value
+                        for key, value in kwargs.items()
+                        if key in s3_dataset_kwargs
+                    },
                 )
                 for dspath, dataset in datasets.items()
             }
@@ -494,6 +517,7 @@ class MultiDataset(IterableDataset):
             input_type_dict=self._input_type_dict,
             task_type=self._task_types.get(dataset),
             task_implementation=self._task_implementation,
+            instruction_config=self._instruction_config,
             interleaved=self._synchronous,
         )
 
@@ -513,6 +537,7 @@ class MultiDataset(IterableDataset):
             'sampling_rates': self._sampling_rates,
             'task_types': self._task_types,
             'task_implementation': self._task_implementation,
+            'instruction_config': self._instruction_config,
             'max_batches': self._max_batches,
             'num_batches': self._num_batches,
             'input_type_dict': self._input_type_dict,
@@ -535,6 +560,7 @@ class MultiDataset(IterableDataset):
             sampling_rates=state_dict['sampling_rates'],
             task_types=state_dict['task_types'],
             task_implementation=state_dict['task_implementation'],
+            instruction_config=state_dict['instruction_config'],
             batch_size=state_dict['batch_size'],
             max_batches=state_dict['max_batches'],
             num_batches=state_dict['num_batches'],

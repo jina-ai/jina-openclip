@@ -256,6 +256,12 @@ def main(args):
     if args.freeze_temperature:
         _model_kwargs['freeze_logit_scale'] = True
 
+    if args.mtl_temperature:
+        _model_kwargs['init_mtl_logit_scale'] = np.log(1 / args.mtl_temperature)
+
+    if args.freeze_mtl_temperature:
+        _model_kwargs['freeze_mtl_logit_scale'] = True
+
     model, preprocess_cfg, preprocess_train, preprocess_val = (
         create_model_and_transforms(
             args.model,
@@ -566,6 +572,8 @@ def main(args):
         dataset_records = train_one_epoch(
             model,
             data,
+            preprocess_val,
+            tokenizer,
             loss,
             mtl_losses,
             epoch,

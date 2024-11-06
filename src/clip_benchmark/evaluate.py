@@ -87,6 +87,8 @@ def run_evaluation_task(
     linear_probe_fewshot_k: int = -1,
     linear_probe_fewshot_lr: float = 0.1,
     linear_probe_fewshot_epochs: int = 10,
+    zeroshot_retrieval_query_instruction: str = '',
+    zeroshot_retrieval_passage_instruction: str = '',
 ):
     """Run a single evaluation task."""
 
@@ -221,6 +223,8 @@ def run_evaluation_task(
             recall_k_list=recall_ks or DEFAULT_RECALL_KS,
             device=device,
             precision=precision,
+            query_instruction=zeroshot_retrieval_query_instruction,
+            passage_instruction=zeroshot_retrieval_passage_instruction,
         )
     elif task == 'image_caption_selection':
         metrics = image_caption_selection.evaluate(
